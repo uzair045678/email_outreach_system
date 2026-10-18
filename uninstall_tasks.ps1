@@ -8,7 +8,7 @@ $ErrorActionPreference = "Continue"
 
 $names = @(
     "Outreach-Research", "Outreach-Send", "Outreach-Bounces", "Outreach-Replies",
-    "Outreach-Followups", "Outreach-Repair", "Outreach-Summary"
+    "Outreach-Followups", "Outreach-Repair", "Outreach-Summary", "Outreach-Freehire"
 )
 
 foreach ($name in $names) {

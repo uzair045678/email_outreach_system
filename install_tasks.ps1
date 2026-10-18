@@ -72,6 +72,14 @@ New-OutreachTask -Name "Replies" -Command "replies" `
         -RepetitionInterval (New-TimeSpan -Minutes 60) `
         -RepetitionDuration (New-TimeSpan -Days 3650))
 
+# freehire job watcher: hourly. Alerts only you (email + Windows notification);
+# it never emails a company.
+New-OutreachTask -Name "Freehire" -Command "freehire" `
+    -Description "Poll freehire.me for new matching jobs and alert you." `
+    -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(25) `
+        -RepetitionInterval (New-TimeSpan -Minutes 60) `
+        -RepetitionDuration (New-TimeSpan -Days 3650))
+
 # Follow-ups and repair: twice a day is plenty.
 New-OutreachTask -Name "Followups" -Command "followups" `
     -Description "Draft follow-ups for silent contacts." `
