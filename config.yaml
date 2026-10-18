@@ -148,3 +148,25 @@ draft:
   max_body_words: 130
   max_subject_len: 70
   retries_before_fallback: 2
+
+# --- freehire job watcher (python -m outreach freehire run) -----------------
+# Polls the keyless public API at freehire.me. Alerts only you; it never
+# emails a company. Jobs.db lives under cache/freehire/, rows mirror to the
+# Freehire sheet in outreach.xlsx (set applied = y there or run
+# `freehire applied <slug>` to stop reminders).
+freehire:
+  enabled: true
+  base_url: https://freehire.me/api/v1
+  timeout_s: 20
+  delay_between_requests_s: 1.0     # polite pause between sequential GETs
+  searches_per_cycle: 5             # max search requests per run
+  results_per_search: 20
+  q_fields: title                   # title-only; description matches are very noisy
+  open_within_days: 14
+  work_mode: ""                     # "", remote, hybrid or onsite
+  keywords: []                      # empty = derived from profile.yaml (engines + XR tags)
+  reminder_hours: [3, 8, 24]        # gap after each delivered alert; last entry repeats
+  max_alerts: 10                    # stop reminding after this many alerts per job
+  quiet_hours: [23, 8]              # local hours (start, end) when nothing is sent
+  notify_email: true                # alert email to yourself via Himalaya
+  notify_windows: true              # Windows notification on the first alert per job
