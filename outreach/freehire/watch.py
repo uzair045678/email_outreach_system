@@ -121,6 +121,8 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
         if not dry_run:
             for job in seen.values():
                 jobsdb.insert(job, db_mod.STATUS_BASELINE, now_iso)
+            for row in jobsdb.all_rows():
+                _sync_sheet(store, row)
         elif seen:
             stats["sample"] = next(iter(seen.values()))
         logger.info("freehire baseline: %d existing job(s) %s", len(seen),
