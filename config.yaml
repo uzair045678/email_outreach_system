@@ -159,13 +159,13 @@ freehire:
   base_url: https://freehire.me/api/v1
   timeout_s: 20
   delay_between_requests_s: 1.0     # polite pause between sequential GETs
-  searches_per_cycle: 5             # max search requests per run
+  searches_per_cycle: 7             # max search requests per run
   results_per_search: 20
   q_fields: title                   # title-only; description matches are very noisy
   open_within_days: 14
   work_mode: ""                     # "", remote, hybrid or onsite
   is_tech: tech                     # tech-only postings (kills nurse/guard noise); "" = off
-  keywords: []                      # empty = derived from profile.yaml (engines + XR tags)
+  keywords: [Unity, Unreal, Virtual Reality, Augmented Reality, Extended Reality, Mixed reality, Game Developer]  # empty = derived from profile.yaml
   reminder_hours: [3, 8, 24]        # gap after each delivered alert; last entry repeats
   max_alerts: 10                    # stop reminding after this many alerts per job
   quiet_hours: [23, 8]              # local hours (start, end) when nothing is sent
