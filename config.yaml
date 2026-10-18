@@ -164,6 +164,7 @@ freehire:
   q_fields: title                   # title-only; description matches are very noisy
   open_within_days: 14
   work_mode: ""                     # "", remote, hybrid or onsite
+  is_tech: tech                     # tech-only postings (kills nurse/guard noise); "" = off
   keywords: []                      # empty = derived from profile.yaml (engines + XR tags)
   reminder_hours: [3, 8, 24]        # gap after each delivered alert; last entry repeats
   max_alerts: 10                    # stop reminding after this many alerts per job

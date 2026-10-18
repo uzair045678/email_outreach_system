@@ -78,6 +78,7 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
     filters = {
         "work_mode": fh.work_mode.raw,
         "open_within_days": fh.open_within_days.raw,
+        "is_tech": fh.is_tech.raw,
     }
     stats: dict[str, Any] = {
         "searches": 0, "ignored_params": [], "seen": 0, "baselined": 0,
@@ -194,7 +195,8 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
                 _sync_sheet(store, jobsdb.get(slug))
             continue
 
-        if in_quiet_hours(now, quiet, tz_name):
+        # Quiet hours only defer real sending; a dry run is a preview.
+        if not dry_run and in_quiet_hours(now, quiet, tz_name):
             stats["deferred_quiet"] += 1
             logger.debug("freehire: %s deferred (quiet hours)", slug)
             continue

@@ -37,6 +37,7 @@ FREEHIRE_CFG = {
     "q_fields": "title",
     "open_within_days": 14,
     "work_mode": "",
+    "is_tech": "tech",
     "keywords": ["unity"],
     "reminder_hours": [3, 8, 24],
     "max_alerts": 10,
@@ -85,6 +86,7 @@ class FakeAPI:
 
     def search(self, q, q_fields="title", filters=None, limit=20):
         self.searches += 1
+        self.last_filters = filters
         if self.results:
             return self.results.pop(0)
         return [], {"total": 0}
@@ -138,6 +140,9 @@ def test_first_run_baselines_silently(env):
     # mirrored to the sheet, and never alerted (next_due stays NULL)
     assert {r["slug"] for r in env.store.freehire_all()} == {"a", "b"}
     assert all(r["next_due_at"] is None for r in env.jobsdb.all_rows())
+    assert api.last_filters == {
+        "work_mode": "", "open_within_days": 14, "is_tech": "tech",
+    }
 
 
 def test_dry_run_first_run_writes_nothing(env):
