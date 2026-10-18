@@ -1,0 +1,126 @@
+# =============================================================================
+# outreach/profile.yaml  -  YOUR details. Fill every TODO.
+# `doctor` refuses to pass until all required fields are filled.
+# Nothing here is ever invented by the pipeline.
+# =============================================================================
+
+full_name: Uzair Ahmad            # required
+email: uzair12ahmad34@gmail.com                # required, the From: address (must match Himalaya account)
+# No fixed headline here: a tailored one-line "title" (e.g. "Unity Developer",
+# "Unreal Developer", "XR/VR Developer", "AR Developer") is generated for each
+# company based on their stack + your real skills/projects.
+years_experience: 3     # required, integer
+based_in: "Islamabad, Pakistan"
+timezone: "Asia/Karachi"
+
+# Links (required)
+github_url: https://github.com/uzair045678
+linkedin_url: https://www.linkedin.com/in/uzair-ahmad-mirza-b939a21a2/
+portfolio_url: https://uzair045678.github.io/POrtfolio_Website/#home
+
+# Optional links (leave blank if unused)
+fiverr_url: "https://www.fiverr.com/insightpro_862?public_mode=AD"
+upwork_url: "https://www.upwork.com/freelancers/~01316287666907ead0?mp_source=share"
+
+# Contact channels used as CV source. If you link the CV instead of attaching,
+# set link_cv_url too.
+cv_pdf_path: E:\My THings\Resume\Filtered ones\Uzair_Resume.pdf          # required, absolute path to your CV PDF
+cv_link_url: "https://drive.google.com/file/d/1SFvy9tz3M3zbPICQiOPr3EyrsOMCE05q/view?usp=drive_link"            # optional, used when toggles.link_cv_instead = true
+
+# ---------------------------------------------------------------------------
+# base_story: your self-introduction "base message", written in first person.
+# It is reused (in your own voice) inside every email and is the only source of
+# personal facts. The model tailors the wording to each company but never
+# invents anything beyond it. Keep it accurate -- ideally 60-200 words.
+# ---------------------------------------------------------------------------
+base_story: "
+  Hi Hiring Team,
+
+  I am Uzair Ahmad, an Associate Software Engineer with experience in developing AR/VR applications, interactive simulations, multiplayer systems, and cross-platform solutions. I was excited to come across the [ROLE] opportunity, as it closely aligns with my technical background and passion for building innovative software products.
+
+  Throughout my career, I have contributed to a variety of Unity and Unreal based projects, including augmented reality experiences, virtual reality training simulators, multiplayer applications using Photon and Mirror, and real-time sensor-integrated systems. These experiences have strengthened my skills in object-oriented programming, software architecture, debugging, performance optimization, and developing scalable, maintainable applications.
+
+  In addition to Unity and C#, I have experience working with C++, mobile application deployment, version control systems, REST API integrations, and collaborative development workflows. I enjoy solving complex technical challenges and continuously expanding my knowledge of emerging technologies, frameworks, and development practices.
+
+  What particularly interests me is the opportunity to create impactful software solutions that extend beyond entertainment, leveraging AR, VR, and interactive technologies to solve real-world problems and improve user experiences.
+
+  I have attached my CV for your review and would welcome the opportunity to discuss how my skills, experience, and enthusiasm can contribute to your engineering team. Thank you for your time and consideration.
+
+  I would welcome the opportunity to discuss how my skills and experience can contribute to your engineering team.
+
+  Portfolio Projects:
+  https://uzair045678.github.io/POrtfolio_Website/#home
+
+  GitHub:
+  https://github.com/uzair045678
+
+  LinkedIn:
+  https://pk.linkedin.com/in/uzair-ahmad-mirza-b939a21a2
+
+  Thank you for your time and consideration. I look forward to hearing from you.
+
+  Kind regards,
+  Uzair Ahmad Mirza
+  uzair12ahmad34@gmail.com"
+
+# ---------------------------------------------------------------------------
+# apply_instructions: your rules for how each email must be written
+# (subject + body order). Leave empty to use the built-in defaults; override
+# to change the structure for every email.
+# ---------------------------------------------------------------------------
+apply_instructions: "
+  Opening: Reference a specific company product or technical initiative.
+  Technical connection: Briefly explain your relevant project, the technologies involved, and how they relate to the company's work.
+  Purpose: Express interest in current or future engineering opportunities, even if no vacancy is advertised.
+  Closing: Invite a discussion and provide your portfolio, GitHub, LinkedIn, and CV."
+
+skills:
+  engines: [Unity, Unreal]
+  xr_devices: []           # e.g. [Quest 2/3, HoloLens 2, Vision Pro, WebXR]
+  languages: []            # e.g. [C#, C++, Python, JavaScript/TypeScript]
+  other: []
+
+# Projects: picked by tag match against each company's work. The email links
+# the best-matching project (plus others if clearly relevant). Descriptions are
+# intentionally omitted for now (one_line_description can be added later).
+# tags: ar, vr, mr, xr, mobile, quest, hololens, webar, unreal, unity, multiplayer, ...
+projects:
+  - name: "HomeCare Safety VR Simulator"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/homecare-safety-vr"
+    tags: [vr, unity, ai]
+  - name: "Multiplayer Helicopter Simulator (Unreal Engine 5)"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/multiplayer-helicopter-simulator"
+    tags: [unreal, vr, multiplayer]
+  - name: "Immersive Mecanno VR (FYP)"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/immersive-mecanno-vr"
+    tags: [unity, vr]
+  - name: "Endless Runner Game (Unreal Engine 5)"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/endless-runner-ue5"
+    tags: [unreal, games]
+  - name: "AR Media Platform"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/ar-media-platform"
+    tags: [unity, ar]
+  - name: "AR Measurement App"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/ar-measurement-app"
+    tags: [unity, ar]
+  - name: "AR Portfolio Contact Card"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/ar-portfolio-contact-card"
+    tags: [unity, ar]
+  - name: "AR Weather App"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/ar-weather-app"
+    tags: [unity, ar]
+  - name: "Web AR Object Placement"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/webar-object-placement"
+    tags: [ar, webar]
+  - name: "RoboSync - Real-Time Robot Control & Telemetry"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/robosync-robot-telemetry"
+    tags: [unity, multiplayer, simulation]
+  - name: "Color Connect - Line Puzzle"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/color-connect-line-puzzle"
+    tags: [unity, mobile, games]
+  - name: "Ricochet Monster Mobile Game"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/ricochet-monster"
+    tags: [unity, mobile, games]
+  - name: "Mob Rushers Mobile Game"
+    url: "https://uzair045678.github.io/POrtfolio_Website/#/project/mob-rushers"
+    tags: [unity, mobile, games]

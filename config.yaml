@@ -1,0 +1,150 @@
+﻿# =============================================================================
+# outreach/config.yaml  -  non-secret configuration
+# Secrets (API keys) live in .env. Personal details live in profile.yaml.
+# =============================================================================
+
+paths:
+  project_dir: F:\_PROJECTS\EMails
+  workbook: F:\_PROJECTS\EMails\outreach.xlsx
+  log_dir: F:\_PROJECTS\EMails\logs
+  cache_dir: F:\_PROJECTS\EMails\cache
+  backup_dir: F:\_PROJECTS\EMails\backups
+  pending_updates: F:\_PROJECTS\EMails\pending_updates.jsonl
+  lock_dir: F:\_PROJECTS\EMails\locks
+  # llama-server from the LM Studio bundle (CUDA 12). Override if you install
+  # a standalone llama.cpp build instead.
+  llama_server_exe: C:\Users\Laptop\.lmstudio\extensions\backends\llama.cpp-win-x86_64-nvidia-cuda12-avx2-2.56.0\llama-server.exe
+  # LM Studio keeps the CUDA runtime DLLs separately from the exe; these dirs
+  # are prepended to PATH when we launch llama-server.
+  llama_dll_dirs:
+    - C:\Users\Laptop\.lmstudio\extensions\backends\vendor\win-llama-cuda12-vendor-v2
+
+# --- Email backends (Himalaya v2) ------------------------------------------
+himalaya:
+  account: gmail
+  # Discovered from `himalaya mailbox list`; adjust if you rename folders.
+  folders:
+    inbox: Inbox
+    sent: "[Gmail]/Sent Mail"
+    spam: "[Gmail]/Spam"
+    all: "[Gmail]/All Mail"
+    trash: "[Gmail]/Trash"
+  sender_name: ""            # filled from profile.yaml.full_name if empty
+  # Gmail already appends SMTP-sent mail to Sent; keep false to avoid duplicates.
+  save_sent_copy: false
+  # Bounce / reply scan window (how far back to read each poll).
+  scan_page_size: 50
+  bounce_lookback_days: 14
+  reply_lookback_days: 21
+
+# --- Local models (GGUF) ----------------------------------------------------
+models:
+  # Load ONE at a time (GTX 1650 = 4 GB VRAM).
+  draft:
+    name: qwen3-8b
+    path: "D:\\Softwares\\LM Studio\\lmstudio-community\\Wen 3-8B\\qwen3-8b-q4_k_m.gguf"
+    port: 8081
+    flags: ["-c", "4096", "-ngl", "20", "--jinja", "-fa", "on"]
+    # Appended to prompts so Qwen does not emit thinking text.
+    no_think: true
+  classify:
+    name: nemotron-3-nano-4b
+    path: "D:\\Softwares\\LM Studio\\lmstudio-community\\NVIDIA-Nemotron-3-Nano-4B-GGUF\\NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf"
+    port: 8082
+    flags: ["-c", "4096", "-ngl", "99", "--jinja", "-fa", "on"]
+  # Optional third model used only for A/B draft testing.
+  ab:
+    name: gemma-4-e2b
+    path: "D:\\Softwares\\LM Studio\\lmstudio-community\\gemma-4-E2B-it-GGUF\\gemma-4-E2B-it-Q4_K_M.gguf"
+    port: 8083
+    flags: ["-c", "4096", "-ngl", "99", "--jinja", "-fa", "on"]
+  startup_timeout_s: 180
+  request_timeout_s: 240
+  temperature: 0.5
+  max_tokens: 700
+
+# --- LLM fallback chain (OpenAI-compatible endpoints) ----------------------
+# Used ONLY when a local draft fails validation twice, or the local server
+# cannot start. Keys live in .env (see .env.example). Tried in order.
+fallback_enabled: true
+fallback:
+  - name: google_ai_studio
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    model: gemini-2.0-flash
+    api_key_env: GOOGLE_AI_STUDIO_API_KEY
+  - name: opencode_zen
+    base_url: https://opencode.ai/zen/v1
+    model: big-pickle
+    api_key_env: OPENCODE_ZEN_API_KEY
+  - name: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: google/gemini-2.0-flash-001
+    api_key_env: OPENROUTER_API_KEY 
+
+# --- Search providers -------------------------------------------------------
+# Order = preferred order. research rotates across enabled providers to
+# stretch free-tier quotas. Keys live in .env.
+search:
+  providers: [tavily, brave, serper]
+  calls_per_day_warn: 120      # warn when the daily search-call budget is near
+  calls_per_day_max: 200
+  results_per_query: 10
+  cache_ttl_days: 30
+
+# --- Quotas -----------------------------------------------------------------
+quotas:
+  companies_per_day: 35        # research target (30..40)
+  corporation_max_fraction: 0.10   # cap on large-corp share of daily quota
+
+# --- Sending: windows, caps, warm-up ---------------------------------------
+sending:
+  send_local_hours: [9, 10, 14]     # recipient local time slots (9-10am + 2pm)
+  jitter_minutes: 17                # random +/- jitter added to each slot
+  max_sends_per_day: 33             # hard ceiling once warmed up
+  max_sends_per_hour: 12
+  min_delay_between_sends_s: 60
+  max_delay_between_sends_s: 180
+  overdue_reschedule_hours: 3       # if overdue by more than this, reschedule
+  # Warm-up ramp: sends allowed per weekday, starting from first send day.
+  warmup_ramp: [33, 33, 33, 33]
+  warmup_start_date: ""             # set automatically to first send date
+  hard_bounce_rate_pause: 0.05      # pause sending above 5% hard-bounce rate
+  bounce_window_days: 7
+  delivered_assumed_after_hours: 24 # no bounce for this long => delivered
+
+# --- Follow-ups / repair ----------------------------------------------------
+followup:
+  after_business_days: 6
+  max_body_words: 70
+  ooo_default_days: 7
+  max_new_address_attempts: 2
+
+# --- Toggles ----------------------------------------------------------------
+toggles:
+  auto_approve: false               # never auto-approve initial drafts
+  auto_approve_resends: false
+  auto_approve_followups: false
+  attach_cv: true                   # attach CV PDF on first email
+  link_cv_instead: false            # if true, link to CV instead of attaching
+  include_marketplace_links: true   # Fiverr/Upwork, freelance-intent only
+  summary_email_to_self: false
+
+# --- Region priority (research fill order) ----------------------------------
+region_priority:
+  - Latin America
+  - Europe (tier 2/3)
+  - Middle East
+  - China
+  - Japan
+  - Malaysia
+  - Singapore
+  - Indonesia
+  - United States
+  - Europe (tier 1)
+
+# --- Email drafting constraints --------------------------------------------
+draft:
+  min_body_words: 70
+  max_body_words: 130
+  max_subject_len: 70
+  retries_before_fallback: 2
