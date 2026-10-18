@@ -24,6 +24,7 @@ COMMANDS = {
     "followups": ("outreach.commands.followups", "run", True),
     "summary": ("outreach.commands.summary", "run", True),
     "import-contacted": ("outreach.commands.import_contacted", "run", False),
+    "freehire": ("outreach.commands.freehire", "run", True),
     "doctor": ("outreach.commands.doctor", "run", False),
     "tune-gpu": ("outreach.commands.tune_gpu", "run", False),
 }
@@ -37,6 +38,7 @@ HELP = {
     "followups": "Draft follow-ups for silent contacts.",
     "summary": "Write today's summary row and log.",
     "import-contacted": "Import your existing contacted list (CSV/XLSX).",
+    "freehire": "Watch freehire.me jobs; alert you, never a company.",
     "doctor": "Check all dependencies and configuration.",
     "tune-gpu": "Probe -ngl values and report VRAM usage.",
 }
@@ -54,6 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=HELP.get(name, ""))
         if name == "import-contacted":
             sp.add_argument("file", help="CSV or XLSX file of already-contacted companies/emails.")
+        if name == "freehire":
+            sp.add_argument("action", nargs="?", default="run",
+                            choices=["run", "applied", "skip", "draft", "list"],
+                            help="run = one watch cycle (default).")
+            sp.add_argument("target", nargs="?", default=None,
+                            help="job slug, for: applied / skip / draft")
     return p
 
 

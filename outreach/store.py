@@ -30,6 +30,7 @@ BAD = "BadAddresses"
 SUPPRESSED = "Suppressed"
 LOG = "Log"
 SUMMARY = "Summary"
+FREEHIRE = "Freehire"
 
 
 class Store(abc.ABC):
@@ -373,6 +374,49 @@ class XlsxStore(Store):
 
     def today_str(self) -> str:
         return util.now_utc().strftime("%Y-%m-%d")
+
+    # -- Freehire --------------------------------------------------------------
+    def freehire_all(self) -> list[dict]:
+        return [row for _, row in self._iter_rows(FREEHIRE)]
+
+    def freehire_get(self, slug: str) -> dict | None:
+        row = self._find_row(FREEHIRE, "slug", slug)
+        if row is None:
+            return None
+        ws = self._ws(FREEHIRE)
+        headers = self._headers[FREEHIRE]
+        return {h: ws.cell(row=row, column=i + 1).value for i, h in enumerate(headers)}
+
+    def freehire_upsert(self, data: dict) -> None:
+        """Mirror a job row. Never called with `applied` (that column is user input)."""
+        slug = data.get("slug")
+        if not slug:
+            return
+        row = self._find_row(FREEHIRE, "slug", slug)
+        if row is None:
+            self._append_row(FREEHIRE, data)
+        else:
+            self._set_fields(FREEHIRE, row, data)
+        self._record({"sheet": FREEHIRE, "kind": "upsert", "key": "slug",
+                      "match": slug, "values": data})
+
+    def freehire_update(self, slug: str, **fields: Any) -> bool:
+        row = self._find_row(FREEHIRE, "slug", slug)
+        if row is None:
+            return False
+        self._set_fields(FREEHIRE, row, fields)
+        self._record({"sheet": FREEHIRE, "kind": "upsert", "key": "slug",
+                      "match": slug, "values": fields})
+        return True
+
+    def freehire_applied_slugs(self) -> set[str]:
+        """Slugs you ticked in the `applied` column by hand in Excel."""
+        wanted = {"y", "yes", "x", "true", "1"}
+        return {
+            str(r.get("slug") or "")
+            for _, r in self._iter_rows(FREEHIRE)
+            if r.get("slug") and str(r.get("applied") or "").strip().lower() in wanted
+        }
 
 
 def open_store(cfg, logger=None) -> XlsxStore:

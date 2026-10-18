@@ -82,7 +82,7 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
     stats: dict[str, Any] = {
         "searches": 0, "ignored_params": [], "seen": 0, "baselined": 0,
         "new": 0, "alerted": 0, "deferred_quiet": 0, "failed": 0,
-        "closed": 0, "applied_synced": 0, "errors": 0,
+        "closed": 0, "applied_synced": 0, "errors": 0, "samples": {},
     }
 
     # -- search (sequential, capped) ----------------------------------------
@@ -98,6 +98,10 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
             stats["errors"] += 1
             continue
         stats["searches"] += 1
+        stats["samples"][keyword] = {
+            "total": meta.get("total"),
+            "titles": [str(j.get("title") or "") for j in jobs[:5]],
+        }
         for entry in meta.get("ignored_params") or []:
             name = str(entry.get("param") or "")
             if name and name not in stats["ignored_params"]:
@@ -117,7 +121,10 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
         if not dry_run:
             for job in seen.values():
                 jobsdb.insert(job, db_mod.STATUS_BASELINE, now_iso)
-        logger.info("freehire baseline: %d existing job(s) stored silently", len(seen))
+        elif seen:
+            stats["sample"] = next(iter(seen.values()))
+        logger.info("freehire baseline: %d existing job(s) %s", len(seen),
+                    "stored silently" if not dry_run else "seen (dry-run, not written)")
         return stats
 
     # -- applied column in the sheet is an input ------------------------------
@@ -209,6 +216,8 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
     if not dry_run and store is not None:
         for row in jobsdb.all_rows():
             _sync_sheet(store, row)
+    if dry_run and stats["alerted"] == 0 and not stats.get("sample") and seen:
+        stats["sample"] = next(iter(seen.values()))
     return stats
 
 

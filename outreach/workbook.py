@@ -71,6 +71,23 @@ SUMMARY_COLUMNS = [
     "notes",
 ]
 
+FREEHIRE_COLUMNS = [
+    "slug",
+    "title",
+    "company",
+    "location",
+    "work_mode",
+    "url",
+    "status",
+    "applied",
+    "first_seen",
+    "last_alert_at",
+    "alerts",
+    "applied_at",
+    "closed_at",
+    "notes",
+]
+
 SHEETS = {
     "Queue": QUEUE_COLUMNS,
     "Contacted": CONTACTED_COLUMNS,
@@ -78,6 +95,7 @@ SHEETS = {
     "Suppressed": SUPPRESSED_COLUMNS,
     "Log": LOG_COLUMNS,
     "Summary": SUMMARY_COLUMNS,
+    "Freehire": FREEHIRE_COLUMNS,
 }
 
 STATUSES = [
@@ -182,6 +200,13 @@ WIDTHS = {
     "gave_up": 9,
     "errors": 8,
     "search_calls": 12,
+    "slug": 44,
+    "work_mode": 12,
+    "url": 45,
+    "applied": 9,
+    "alerts": 8,
+    "applied_at": 21,
+    "closed_at": 21,
 }
 
 
