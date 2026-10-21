@@ -166,7 +166,7 @@ freehire:
   work_mode: ""                     # "", remote, hybrid or onsite
   is_tech: tech                     # tech-only postings (kills nurse/guard noise); "" = off
   keywords: [Unity, Unreal, Virtual Reality, Augmented Reality, Extended Reality, Mixed reality, Game Developer]  # empty = derived from profile.yaml
-  digest_times: ["08:00", "16:00", "20:00", "22:00"]  # local; a slot fires only if a cycle runs in [slot, slot+1h)
+  digest_times: ["08:00", "16:00", "20:00", "22:00"]  # fallback send windows: ONE email/day, at the first window a cycle hits
   categories:                       # digest grouping by title keywords (highest tier wins; no match = low)
     priority: [Unity, Unreal, Game Developer]
     medium: [Virtual Reality, Augmented Reality]

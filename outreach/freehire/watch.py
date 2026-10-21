@@ -2,9 +2,10 @@
 
 Rules enforced here:
   * first ever run stores everything silently (baseline, no digest)
-  * new jobs wait quietly until a digest slot fires (config ``digest_times``):
-    four local-time slots per day; a slot only fires if this cycle runs inside
-    ``[slot, slot+1h)`` - missed windows are skipped, never catch-up
+  * new jobs wait quietly and are batched into at most ONE digest email per
+    local day (config ``digest_times`` = fallback send windows 08/16/20/22:
+    the first window a cycle actually hits wins - if the laptop was asleep,
+    that window is skipped; an empty window does not consume the day)
   * the digest groups jobs priority/medium/low by title keywords (config
     ``categories``) and is one email; each job is listed in exactly one digest
   * a failed digest email never advances ``alerts`` or the slot record, so the
@@ -186,7 +187,12 @@ def _maybe_send_digest(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store,
                        notifier, stats: dict[str, Any], seen: dict[str, dict],
                        now: datetime, dry_run: bool,
                        virtual_new: list[dict] | None = None) -> None:
-    """Fire one digest when the local clock sits inside an unsent slot window."""
+    """At most ONE digest per local day, at the first slot window a cycle hits.
+
+    ``digest_times`` are fallbacks, not four sends: 08:00 empty -> try 16:00 ->
+    20:00 -> 22:00; after a successful send the day is done and queued jobs
+    wait for tomorrow's first slot. Missed windows (laptop asleep) pass.
+    """
     cfg, logger = ctx.cfg, ctx.logger
     fh = cfg.raw.freehire
     tz_name = str(ctx.cfg.profile_raw().get("timezone") or "")
@@ -204,7 +210,8 @@ def _maybe_send_digest(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store,
             state = json.loads(raw)
         except ValueError:
             state = {}
-    sent_today = list(state.get("slots") or []) if state.get("date") == today else []
+    if state.get("date") == today:
+        return  # today's single email already went out
 
     slot: str | None = None
     for candidate in fh.digest_times.raw or []:
@@ -213,18 +220,11 @@ def _maybe_send_digest(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store,
         if start is None:
             logger.warning("freehire: bad digest_times entry %r ignored", candidate)
             continue
-        if name in sent_today:
-            continue
         if start <= now_min < start + 60:
             slot = name
             break
     if slot is None:
         return  # outside every window: missed slots are skipped, no catch-up
-
-    def _record_slot() -> None:
-        if not dry_run:
-            jobsdb.meta_set("digest_state", json.dumps(
-                {"date": today, "slots": sent_today + [slot]}))
 
     # Quiet hours defer real sending; a dry run is a preview.
     if not dry_run and in_quiet_hours(now, list(fh.quiet_hours.raw), tz_name):
@@ -241,9 +241,8 @@ def _maybe_send_digest(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store,
             if (job.get("public_slug") or "") not in known
         ]
     if not candidates:
-        _record_slot()  # nothing new; never email an empty digest
-        logger.info("freehire: digest slot %s: 0 new jobs, nothing sent", slot)
-        return
+        logger.info("freehire: slot %s: 0 new jobs; trying a later slot today", slot)
+        return  # day not consumed: a later fallback slot can still send
 
     categories = categories_of(fh)
     now_ref = util.to_iso(now)
@@ -280,8 +279,7 @@ def _maybe_send_digest(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store,
                                 if job.get(k)}})
 
     if not fresh:
-        _record_slot()  # every candidate closed; don't spin on this slot forever
-        return
+        return  # every candidate closed; day not consumed, later slots may retry
 
     groups = [(tier, [j for j in fresh
                       if classify(str(j.get("title") or ""), categories) == tier])
@@ -297,8 +295,8 @@ def _maybe_send_digest(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store,
         for _, jobs in groups:
             for job in jobs:
                 jobsdb.record_alert(job["slug"], now_ref, None)
-        _record_slot()
-        logger.info("freehire: digest slot %s sent (%s)", slot,
+        jobsdb.meta_set("digest_state", json.dumps({"date": today}))  # day done
+        logger.info("freehire: daily digest sent at slot %s (%s)", slot,
                     _counts_label(groups))
 
 

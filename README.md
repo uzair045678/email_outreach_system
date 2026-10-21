@@ -129,14 +129,16 @@ State lives in `cache/freehire/jobs.db` (deduped by `public_slug`) and mirrors t
 the **Freehire** sheet in `outreach.xlsx`. It only alerts **you**; it never
 emails a company.
 
-New jobs wait quietly and land in **one digest email** at the next slot in
-`freehire.digest_times` (default `08:00, 16:00, 20:00, 22:00` local time from
-`profile.yaml`). A slot only fires if the hourly cycle happens to run inside
-`[slot, slot+1h)` - if the laptop was asleep, that slot is simply skipped
-(no catch-up). The digest groups jobs **priority / medium / low** by title
-keywords (`freehire.categories`), one Windows toast when it goes out, and each
-job is listed in exactly one digest, ever. Quiet hours 23:00-08:00 defer the
-digest. The first run baselines existing jobs silently, so you are not flooded.
+New jobs wait quietly and land in **one digest email per day** at the first
+slot in `freehire.digest_times` (default `08:00, 16:00, 20:00, 22:00` local
+time from `profile.yaml`) that the hourly cycle actually hits - the times are
+fallbacks, not four sends. A window only fires if a cycle runs inside
+`[slot, slot+1h)`; if the laptop was asleep, that window is skipped and the
+next one is used. An empty window does not consume the day. The digest groups
+jobs **priority / medium / low** by title keywords (`freehire.categories`), one
+Windows toast when it goes out, and each job is listed in exactly one digest,
+ever. Quiet hours 23:00-08:00 defer the digest. The first run baselines
+existing jobs silently, so you are not flooded.
 
 | command | what it does |
 |---------|--------------|

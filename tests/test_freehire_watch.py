@@ -200,7 +200,29 @@ def test_digest_sends_one_grouped_email_in_window(env):
         row = env.jobsdb.get(slug)
         assert row["alerts"] == 1 and row["status"] == db_mod.STATUS_WATCHING
     state = json.loads(env.jobsdb.meta_get("digest_state"))
-    assert state == {"date": "2026-10-18", "slots": ["16:00"]}
+    assert state == {"date": "2026-10-18"}
+
+
+def test_empty_morning_window_falls_back_to_later_slot(env):
+    api = FakeAPI(results=[([job("a")], {}), ([job("a")], {}), ([job("a"), job("c")], {})])
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)  # baseline
+
+    env.clock.now = datetime(2026, 10, 18, 3, 30, tzinfo=UTC)  # 08:30: nothing queued
+    s2 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert s2["digest"] == 0 and env.notifier.calls == []
+    assert env.jobsdb.meta_get("digest_state") is None  # day not consumed
+
+    env.clock.now = IN_SLOT  # 16:05: fallback window, job c now queued
+    s3 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert s3["digest"] == 1 and digested_slugs(env.notifier.calls[0]) == ["c"]
+
+    # a later window the same day must NOT send a second email
+    env.clock.now = datetime(2026, 10, 18, 15, 5, tzinfo=UTC)  # 20:05
+    api.results.append(([job("a"), job("c"), job("z")], {}))
+    s4 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert s4["new"] == 1 and s4["digest"] == 0
+    assert len(env.notifier.calls) == 1
+    assert env.jobsdb.get("z")["alerts"] == 0
 
 
 def test_slot_fires_only_once_per_day(env):
@@ -279,7 +301,7 @@ def test_gone_posting_excluded_from_digest(env):
     stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
     assert stats["closed"] == 1 and env.notifier.calls == []
     assert env.jobsdb.get("w")["status"] == db_mod.STATUS_CLOSED
-    assert json.loads(env.jobsdb.meta_get("digest_state"))["slots"] == ["16:00"]
+    assert env.jobsdb.meta_get("digest_state") is None  # nothing sent, day not burned
 
 
 def test_closed_at_excluded_from_digest(env):
