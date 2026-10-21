@@ -281,7 +281,7 @@ def apply_validations(wb: Workbook) -> None:
     dv_approve.error = "Type y to approve or skip to reject."
     dv_approve.promptTitle = "Approve"
     queue.add_data_validation(dv_approve)
-    dv_approve.add("R2:R1048576")
+    dv_approve.add("S2:S1048576")
 
     dv_type = DataValidation(
         type="list", formula1=f'"{",".join(COMPANY_TYPES)}"', allow_blank=True
@@ -294,6 +294,17 @@ def apply_validations(wb: Workbook) -> None:
     )
     queue.add_data_validation(dv_conf)
     dv_conf.add("K2:K1048576")
+
+    freehire = wb["Freehire"]
+    freehire.data_validations.dataValidation = []
+    dv_applied = DataValidation(
+        type="list", formula1='"y"', allow_blank=True, showDropDown=False
+    )
+    dv_applied.promptTitle = "Applied"
+    dv_applied.prompt = "Pick y once you applied (clear the cell to reset)."
+    dv_applied.error = "Only y is valid here."
+    freehire.add_data_validation(dv_applied)
+    dv_applied.add("H2:H1048576")  # applied = 8th column on the Freehire sheet
 
 
 def build_workbook() -> Workbook:
