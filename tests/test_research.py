@@ -128,6 +128,7 @@ def test_contact_extraction_from_html(tmp_path, monkeypatch):
             <html><body>
             <p>Jane Doe, Founder - jane@studio-xr.com</p>
             <p>Bob Smith, CTO - bob@studio-xr.com</p>
+            <p>Third-party recruiter - talent@example.org</p>
             </body></html>
         """,
     }
@@ -148,6 +149,7 @@ def test_contact_extraction_from_html(tmp_path, monkeypatch):
     assert "jane@studio-xr.com" in emails
     assert "bob@studio-xr.com" in emails
     assert "hello@studio-xr.com" in emails
+    assert "talent@example.org" not in emails
     # founder and CTO outrank the generic hello@
     assert cands[0].rank <= 2
     assert cands[-1].kind == "generic"

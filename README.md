@@ -92,8 +92,10 @@ Global flags: `--dry-run` (do everything except send/write) and `--limit N`.
 
 ## Daily workflow
 
-1. `research` runs in the morning and fills **Queue** rows with
-   `status = pending_review`.
+1. `research` runs nightly at 10:30 PM and fills **Queue** rows with
+   `status = pending_review` for the next day. When it finishes, Windows shows
+   an approval reminder. If the computer was off, Task Scheduler runs the
+   missed research job after the next sign-in.
 2. Open `F:\_PROJECTS\EMails\outreach.xlsx` and, on each row you like, set
    **approve = yes** and **status = approved**. Edit subject/body freely.
 3. `send` (every 30 min) mails approved rows whose send time has arrived and
@@ -122,30 +124,34 @@ Side branches: `bounced_soft`, `bounced_hard`, `needs_new_address` â†’ (rep
 
 ## freehire job watcher
 
-Polls the public, keyless freehire.me API for jobs matching your XR keywords.
+Polls the public, keyless freehire.me API for jobs matching your keywords.
 State lives in `cache/freehire/jobs.db` (deduped by `public_slug`) and mirrors to
-the **Freehire** sheet in `outreach.xlsx`. A match only alerts **you** (email via
-Himalaya + a Windows notification on the first alert); it never emails a company.
+the **Freehire** sheet in `outreach.xlsx`. It only alerts **you**; it never
+emails a company.
+
+New jobs wait quietly and land in **one digest email** at the next slot in
+`freehire.digest_times` (default `08:00, 16:00, 20:00, 22:00` local time from
+`profile.yaml`). A slot only fires if the hourly cycle happens to run inside
+`[slot, slot+1h)` - if the laptop was asleep, that slot is simply skipped
+(no catch-up). The digest groups jobs **priority / medium / low** by title
+keywords (`freehire.categories`), one Windows toast when it goes out, and each
+job is listed in exactly one digest, ever. Quiet hours 23:00-08:00 defer the
+digest. The first run baselines existing jobs silently, so you are not flooded.
 
 | command | what it does |
 |---------|--------------|
 | `freehire` / `freehire run` | one watch cycle (the scheduled task calls this hourly) |
-| `freehire applied <slug>` | mark applied â†’ stops every reminder |
-| `freehire skip <slug>`     | ignore the job â†’ stops every reminder |
+| `freehire applied <slug>` | mark applied -> job leaves the queue, no digest listing |
+| `freehire skip <slug>`     | ignore the job -> same effect |
 | `freehire draft <slug>`    | find the company contact, queue an "I already applied" heads-up email as `pending_review` |
 | `freehire list`            | show tracked jobs and their statuses |
 
-Reminders repeat 3h, 8h, then daily (max 10) until you mark the job
-applied/skipped or the posting closes. Quiet hours 23:00â€“08:00
-(`profile.yaml` timezone) defer sending. The first run baselines existing jobs
-silently, so you are not flooded.
+### Marking a job as applied (either way works - dual input)
 
-### Marking a job as applied (either way works - single source of truth)
-
-1. `python -m outreach freehire applied <slug>` - every alert email contains
+1. `python -m outreach freehire applied <slug>` - every digest entry contains
    the exact command for that job, or
-2. set `applied = y` on the Freehire sheet in Excel; the next cycle reads it
-   back and stops reminders.
+2. set `applied = y` on the Freehire sheet in Excel (dropdown); the next cycle
+   reads it back and the job stops appearing in digests.
 
 Applications made on freehire's own site are not visible to the API (no
 endpoint exists), so record those with one of the two ways above.
@@ -159,21 +165,22 @@ information and CV"*. **It is never sent by itself** - you approve it in
 `outreach.xlsx` like any other draft (or fill `to_email` yourself if no contact
 was found).
 
-### Tuning keywords
+### Tuning keywords and digest categories
 
-`config.yaml â†’ freehire.keywords` - empty (default) derives them from
-`profile.yaml` (engines + XR project tags + XR/VR/AR/WebXR). Every keyword is
-searched against job **titles** only (`q_fields: title`); description matching is
-far too noisy on freehire. To review relevance before changing anything:
+`config.yaml -> freehire.keywords` - what gets searched (titles only,
+`q_fields: title`; description matching is far too noisy on freehire).
+`freehire.categories` - which title keywords place a job in the priority /
+medium / low digest sections (highest tier wins, no match = low). To review
+relevance before changing anything:
 
 ```powershell
 python -m outreach --dry-run freehire run
 ```
 
 That prints per-keyword totals with sample titles, any filter the API dropped
-(`IGNORED_PARAMS=...`), and a sample alert email. Copy the useful keywords into
-`freehire.keywords` and drop the noisy ones. Note: `open_within_days` filters by
-freehire's crawl date (`created_at`), not the original `posted_at`.
+(`IGNORED_PARAMS=...`), and - inside a slot window - the digest that would be
+sent. Note: `open_within_days` filters by freehire's crawl date (`created_at`),
+not the original `posted_at`.
 
 ---
 
@@ -185,8 +192,9 @@ powershell -ExecutionPolicy Bypass -File F:\_PROJECTS\EMails\install_tasks.ps1
 ```
 This creates `Outreach-Research`, `-Send`, `-Bounces`, `-Replies`,
 `-Followups`, `-Repair`, `-Summary`, `-Freehire` (freehire polls hourly).
-Remove them with `uninstall_tasks.ps1`. The pipeline's
-file locks make frequent triggers safe.
+`Outreach-Research` runs at 10:30 PM and has catch-up enabled for missed runs.
+Remove them with `uninstall_tasks.ps1`. The pipeline's file locks make frequent
+triggers safe.
 
 ---
 

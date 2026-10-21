@@ -48,14 +48,17 @@ class Drafter:
         if self._no_think:
             messages = add_no_think(messages)
         try:
-            return client.chat_json(messages, schema=prompts.FIT_SCHEMA)
+            return client.chat_json(messages, schema=prompts.FIT_SCHEMA, temperature=0.1, max_tokens=320)
         except Exception as exc:  # noqa: BLE001
             if self.logger:
                 self.logger.warning("fit classification failed for %s: %s", company, exc)
             return None
 
     # -- drafting -----------------------------------------------------------
-    def _make_draft(self, client, company, page_text, contact, company_type, target_kind, include_marketplace) -> Draft:
+    def _make_draft(
+        self, client, company, page_text, contact, company_type, target_kind,
+        include_marketplace, repair_errors: list[str] | None = None,
+    ) -> Draft:
         tags = contact.get("tags") or []
         projects = pick_projects(self.profile, tags)
         allowed = collect_allowed_urls(self.profile)
@@ -65,6 +68,11 @@ class Drafter:
             company_type, target_kind, projects, include_marketplace, allowed, OPT_OUT,
             company_tags=tags, apply_instructions=apply_instructions,
         )
+        if repair_errors:
+            messages.append({
+                "role": "user",
+                "content": "Correct the next draft so it passes these checks: " + "; ".join(repair_errors[:4]),
+            })
         if self._no_think:
             messages = add_no_think(messages)
         data = client.chat_json(messages, schema=prompts.DRAFT_SCHEMA)
@@ -90,9 +98,13 @@ class Drafter:
     ) -> tuple[Draft | None, list[str], bool]:
         """Return (draft, errors, used_fallback)."""
         last_errors: list[str] = []
+        repair_errors: list[str] = []
         for attempt in range(self.retries + 1):
             try:
-                draft = self._make_draft(client, company, page_text, contact, company_type, target_kind, include_marketplace)
+                draft = self._make_draft(
+                    client, company, page_text, contact, company_type, target_kind,
+                    include_marketplace, repair_errors=repair_errors,
+                )
             except Exception as exc:  # noqa: BLE001
                 last_errors = [f"model error: {exc}"]
                 continue
@@ -100,12 +112,16 @@ class Drafter:
             if not errors:
                 return draft, [], False
             last_errors = errors
+            repair_errors.extend(error for error in errors if error not in repair_errors)
             if self.logger:
                 self.logger.info("draft attempt %d rejected for %s: %s", attempt + 1, company, errors[:3])
 
         if self.fallback is not None and self.fallback.available:
             try:
-                draft = self._make_draft(self.fallback, company, page_text, contact, company_type, target_kind, include_marketplace)
+                draft = self._make_draft(
+                    self.fallback, company, page_text, contact, company_type, target_kind,
+                    include_marketplace, repair_errors=repair_errors,
+                )
                 errors = validate_draft(draft, self.profile, page_text, self.cfg, contact.get("name", ""), company)
                 if not errors:
                     return draft, [], True

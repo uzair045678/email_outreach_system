@@ -1,9 +1,8 @@
-"""Alert delivery: email to yourself via Himalaya + a Windows notification.
+"""Digest delivery: one daily email to yourself via Himalaya + a Windows toast.
 
-``alert()`` returns True only when the primary channel delivered. The email is
-the primary channel (its failure must block state advance so the next cycle
-retries); the Windows notification is best effort and only fires on the first
-alert for a job.
+``digest()`` returns True only when the primary channel delivered. The email is
+the primary channel (its failure must not advance any job state, so the next
+in-window cycle retries); the Windows notification is best effort.
 """
 
 from __future__ import annotations
@@ -17,6 +16,8 @@ from ..send.mime import build_message
 # Registered AppUserModelID for PowerShell, so the toast shows a real app name.
 _POWERSHELL_AUMID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
 
+TIER_ORDER = ("priority", "medium", "low")
+
 
 class Notifier:
     def __init__(self, cfg, logger, dry_run: bool = False):
@@ -27,10 +28,12 @@ class Notifier:
         self.email_on = bool(fh.notify_email.raw)
         self.windows_on = bool(fh.notify_windows.raw)
         if not self.email_on and not self.windows_on:
-            logger.warning("freehire: all notify channels disabled; alerts will just log")
+            logger.warning("freehire: all notify channels disabled; digest will just log")
 
-    def alert(self, job: dict, alert_no: int, max_alerts: int) -> bool:
-        subject, body = render_alert(job, alert_no, max_alerts)
+    def digest(self, groups: list[tuple[str, list[dict]]]) -> bool:
+        """groups: [(tier_name, [job rows...]), ...] already ordered priority-first."""
+        subject, body = render_digest(groups)
+        counts_text = _counts_text(groups)
         if self.dry_run:
             print(f"[dry-run] would send email:\nSubject: {subject}\n{body}")
             return True
@@ -38,13 +41,13 @@ class Notifier:
         primary_ok = True
         if self.email_on:
             primary_ok = self._email(subject, body)
-        if self.windows_on and alert_no == 1:
-            if not self._windows(job.get("title") or "freehire", _windows_blurb(job)):
-                self.logger.warning("freehire: windows notification failed (email still sent)")
+        if self.windows_on:
+            if not self._windows("freehire", counts_text):
+                self.logger.warning("freehire: windows notification failed (email unaffected)")
             if not self.email_on:
                 primary_ok = False
         if not self.email_on and not self.windows_on:
-            self.logger.info("freehire alert (channels disabled): %s", subject)
+            self.logger.info("freehire digest (channels disabled): %s", subject)
         return primary_ok
 
     # -- channels ------------------------------------------------------------
@@ -52,7 +55,7 @@ class Notifier:
         profile = self.cfg.profile_raw()
         to_email = profile.get("email") or ""
         if not to_email or to_email == "TODO":
-            self.logger.error("freehire: no profile email; cannot deliver alert")
+            self.logger.error("freehire: no profile email; cannot deliver digest")
             return False
         raw, mid = build_message(
             from_email=to_email, to_email=to_email, subject=subject, body=body,
@@ -61,45 +64,48 @@ class Notifier:
         hima = Himalaya(self.cfg.raw.himalaya.account.raw, logger=self.logger)
         ok, err = hima.send_raw(raw)
         if ok:
-            self.logger.info("freehire alert email sent (%s)", mid)
+            self.logger.info("freehire digest email sent (%s)", mid)
         else:
-            self.logger.error("freehire alert email failed: %s", err)
+            self.logger.error("freehire digest email failed: %s", err)
         return ok
 
     def _windows(self, title: str, text: str) -> bool:
         return powershell_notify(title, text)
 
 
-def render_alert(job: dict, alert_no: int, max_alerts: int) -> tuple[str, str]:
-    slug = job.get("public_slug") or job.get("slug") or ""
-    if alert_no == 1:
-        subject = f"[freehire] NEW: {job.get('title', '')} - {job.get('company', '')}"
-        head = "New freehire job match"
-    else:
-        subject = (f"[freehire] reminder {alert_no}/{max_alerts}: "
-                   f"{job.get('title', '')} - {job.get('company', '')}")
-        head = f"Reminder {alert_no} of {max_alerts} (still unhandled)"
-    body = "\n".join([
-        head,
-        "",
-        f"Title:     {job.get('title', '')}",
-        f"Company:   {job.get('company', '')}",
-        f"Location:  {job.get('location', '')}",
-        f"Work mode: {job.get('work_mode', '')}",
-        f"Link:      {job.get('url', '')}",
-        f"Job id:    {slug}",
-        "",
-        f"Mark applied:  python -m outreach freehire applied {slug}",
-        f"Skip:          python -m outreach freehire skip {slug}",
-        f"Draft email:   python -m outreach freehire draft {slug}",
-        "",
-        "Or set applied = y on the Freehire sheet in outreach.xlsx.",
-    ])
-    return subject, body + "\n"
+def render_digest(groups: list[tuple[str, list[dict]]]) -> tuple[str, str]:
+    counts_text = _counts_text(groups)
+    subject = f"[freehire] digest: {counts_text}"
+    lines = [counts_text, ""]
+    for tier, jobs in groups:
+        if not jobs:
+            continue
+        lines.append(f"{tier.upper()} ({len(jobs)})")
+        for i, job in enumerate(jobs, 1):
+            slug = job.get("slug") or job.get("public_slug") or ""
+            lines.append(f"{i}. {job.get('title', '')} - {job.get('company', '')}")
+            location = job.get("location") or ""
+            work_mode = job.get("work_mode") or ""
+            extra = " | ".join(x for x in (location, work_mode) if x)
+            if extra:
+                lines.append(f"   {extra}")
+            if job.get("url"):
+                lines.append(f"   {job['url']}")
+            lines.append(f"   python -m outreach freehire applied {slug}")
+            lines.append(f"   python -m outreach freehire skip {slug}")
+            lines.append(f"   python -m outreach freehire draft {slug}")
+            lines.append("")
+        lines.append("")
+    lines.append("Or set applied = y on the Freehire sheet in outreach.xlsx.")
+    return subject, "\n".join(lines) + "\n"
 
 
-def _windows_blurb(job: dict) -> str:
-    return f"{job.get('company', '')} - {job.get('location', '')} - {job.get('work_mode', '')}"
+def _counts_text(groups: list[tuple[str, list[dict]]]) -> str:
+    total = sum(len(jobs) for _, jobs in groups)
+    if not total:
+        return "0 new jobs"
+    parts = [f"{len(jobs)} {tier}" for tier, jobs in groups if jobs]
+    return f"{total} new job(s): " + ", ".join(parts)
 
 
 def powershell_notify(title: str, text: str) -> bool:

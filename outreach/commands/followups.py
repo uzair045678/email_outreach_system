@@ -57,7 +57,7 @@ def run(ctx) -> int:
         return 0
 
     server = srv.load_one(cfg, "draft", logger=logger)
-    started = server.start(startup_timeout_s=int(cfg.raw.models.startup_timeout_s.raw))
+    started = server.start(timeout_s=int(cfg.raw.models.startup_timeout_s.raw))
     if not started:
         logger.error("followups: draft model could not start")
         print("followups: draft model unavailable.")

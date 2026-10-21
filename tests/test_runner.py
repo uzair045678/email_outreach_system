@@ -87,7 +87,7 @@ class FakeServer:
     name = "fake"
     base_url = "http://localhost:1"
 
-    def start(self, **k):
+    def start(self, timeout_s=180):
         return True
 
     def stop(self):
@@ -141,3 +141,67 @@ def test_runner_queues_candidate(ctx, monkeypatch):
     rows = ctx.store.queue_all()
     assert any(r["to_email"] == "jane@acme.example" and r["status"] == "pending_review" for r in rows)
     assert (ctx.store.summary_get(ctx.today) or {}).get("drafted") == 1
+
+
+def test_direct_search_company_name_comes_from_domain():
+    candidate = CompanyCandidate(
+        "mirabo-global.com", "https://mirabo-global.com/article", "Unrelated article title",
+        "Japan", "q", source_kind="direct",
+    )
+    assert runner._company_name(candidate, candidate.domain) == "Mirabo Global"
+
+
+def test_limit_caps_discovered_candidates(ctx, monkeypatch):
+    ctx.limit = 2
+    seen = {}
+
+    def discover(*args, **kwargs):
+        seen["need"] = kwargs["need"]
+        return []
+
+    monkeypatch.setattr(runner, "Fetcher", FakeFetcher)
+    monkeypatch.setattr(runner, "EmailVerifier", FakeVerifier)
+    monkeypatch.setattr(runner, "SearchManager", FakeSearch)
+    monkeypatch.setattr(runner.srv, "load_one", lambda *a, **k: FakeServer())
+    monkeypatch.setattr(runner, "LLMClient", lambda *a, **k: object())
+    monkeypatch.setattr(runner, "discover_candidates", discover)
+
+    runner.run(ctx)
+
+    assert seen["need"] == 2
+
+
+def test_research_command_notifies_for_pending_drafts(ctx, monkeypatch):
+    from outreach.commands import research as command
+
+    ctx.store.queue_add({"company": "Acme", "status": "pending_review"})
+    notices = []
+    monkeypatch.setattr(command, "run_pipeline", lambda _ctx: {"drafted": 1})
+    monkeypatch.setattr(
+        command,
+        "powershell_notify",
+        lambda title, body: notices.append((title, body)) or True,
+    )
+
+    assert command.run(ctx) == 0
+    assert notices == [
+        ("Outreach: approve emails", "1 email draft(s) are waiting for approval in outreach.xlsx.")
+    ]
+
+
+def test_research_command_notifies_on_unhandled_failure(ctx, monkeypatch):
+    from outreach.commands import research as command
+
+    notices = []
+    monkeypatch.setattr(command, "run_pipeline", lambda _ctx: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        command,
+        "powershell_notify",
+        lambda title, body: notices.append((title, body)) or True,
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        command.run(ctx)
+    assert notices == [
+        ("Outreach research failed", "Tomorrow's email drafts were not prepared. Check the outreach log.")
+    ]

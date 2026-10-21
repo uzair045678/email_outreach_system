@@ -40,6 +40,11 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def _chat_url(self) -> str:
+        if self.base_url.endswith(("/v1", "/openai")):
+            return f"{self.base_url}/chat/completions"
+        return f"{self.base_url}/v1/chat/completions"
+
     def chat(self, messages: list[dict], schema: dict | None = None,
              temperature: float | None = None, max_tokens: int | None = None) -> str:
         payload: dict[str, Any] = {
@@ -55,7 +60,7 @@ class LLMClient:
                 "json_schema": {"name": "out", "strict": True, "schema": schema},
             }
         resp = requests.post(
-            f"{self.base_url}/v1/chat/completions",
+            self._chat_url(),
             headers=self._headers(),
             json=payload,
             timeout=self.timeout_s,

@@ -1,7 +1,8 @@
-"""Tests for the freehire watch cycle: baseline, alerts, reminders, guards."""
+"""Tests for the freehire watch cycle: baseline, digest slots, categories, guards."""
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -11,8 +12,7 @@ from outreach.commands.freehire import _mark
 from outreach.config import load_config
 from outreach.context import Context
 from outreach.freehire import db as db_mod
-from outreach.freehire import watch
-from outreach.freehire.watch import derive_keywords, next_due_after, run_cycle
+from outreach.freehire.watch import classify, derive_keywords, run_cycle
 from outreach.store import open_store
 
 UTC = timezone.utc
@@ -39,12 +39,20 @@ FREEHIRE_CFG = {
     "work_mode": "",
     "is_tech": "tech",
     "keywords": ["unity"],
-    "reminder_hours": [3, 8, 24],
-    "max_alerts": 10,
+    "digest_times": ["08:00", "16:00", "20:00", "22:00"],
+    "categories": {
+        "priority": ["Unity", "Unreal", "Game Developer"],
+        "medium": ["Virtual Reality", "Augmented Reality"],
+        "low": ["Extended Reality", "Mixed reality"],
+    },
     "quiet_hours": [0, 0],  # disabled by default; the quiet-hours test enables it
     "notify_email": True,
     "notify_windows": True,
 }
+
+# Pakistan is UTC+5, no DST: 11:05 UTC == 16:05 local (inside the 16:00 slot).
+IN_SLOT = datetime(2026, 10, 18, 11, 5, tzinfo=UTC)
+OUT_OF_SLOT = datetime(2026, 10, 18, 10, 0, tzinfo=UTC)  # 15:00 local
 
 
 def make_cfg(tmp_path):
@@ -102,8 +110,8 @@ class FakeNotifier:
         self.ok = ok
         self.calls = []
 
-    def alert(self, job, alert_no, max_alerts):
-        self.calls.append((job.get("slug"), alert_no))
+    def digest(self, groups):
+        self.calls.append(groups)
         return self.ok
 
 
@@ -117,10 +125,18 @@ def job(slug, **over):
     return base
 
 
+def digested_slugs(groups) -> list[str]:
+    return [j.get("slug") or j.get("public_slug") for _, jobs in groups for j in jobs]
+
+
+def tier_names(groups) -> list[str]:
+    return [name for name, jobs in groups if jobs]
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     cfg = make_cfg(tmp_path)
-    clock = Clock(datetime(2026, 10, 18, 10, 0, tzinfo=UTC))  # 15:00 Pakistan: not quiet
+    clock = Clock(OUT_OF_SLOT)  # 15:00 Pakistan: outside every slot
     monkeypatch.setattr(util, "now_utc", clock)
     store = open_store(cfg)
     jobsdb = db_mod.JobsDB(cfg.path("cache_dir") / "freehire" / "jobs.db")
@@ -137,12 +153,9 @@ def test_first_run_baselines_silently(env):
     assert env.notifier.calls == []
     assert {r["slug"] for r in env.jobsdb.all_rows()} == {"a", "b"}
     assert all(r["status"] == db_mod.STATUS_BASELINE for r in env.jobsdb.all_rows())
-    # mirrored to the sheet, and never alerted (next_due stays NULL)
+    # mirrored to the sheet, category computed, never alerted
     assert {r["slug"] for r in env.store.freehire_all()} == {"a", "b"}
-    assert all(r["next_due_at"] is None for r in env.jobsdb.all_rows())
-    assert api.last_filters == {
-        "work_mode": "", "open_within_days": 14, "is_tech": "tech",
-    }
+    assert all(r["category"] == "priority" for r in env.store.freehire_all())
 
 
 def test_dry_run_first_run_writes_nothing(env):
@@ -155,140 +168,148 @@ def test_dry_run_first_run_writes_nothing(env):
     assert env.notifier.calls == []
 
 
-def test_new_job_alerts_exactly_once(env):
+def test_new_jobs_wait_for_digest_window(env):
+    api = FakeAPI(results=[([job("a")], {}), ([job("a"), job("c")], {})])
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)  # baseline
+    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)  # 15:0x: outside
+    assert stats["new"] == 1
+    assert stats["digest"] == 0 and stats["alerted"] == 0
+    assert env.notifier.calls == []
+    assert stats["queued"] == 1
+    assert env.jobsdb.get("c")["alerts"] == 0
+
+
+def test_digest_sends_one_grouped_email_in_window(env):
+    api = FakeAPI(results=[
+        ([job("a")], {}),
+        ([job("a"),
+          job("p", title="Unreal Engineer"),
+          job("m", title="Virtual Reality Tester"),
+          job("l", title="Warehouse Extended Goods")], {}),
+    ])
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)  # baseline
+    env.clock.now = IN_SLOT  # 16:05 Pakistan
+    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+
+    assert stats["digest"] == 1 and stats["alerted"] == 3
+    assert len(env.notifier.calls) == 1
+    groups = env.notifier.calls[0]
+    assert tier_names(groups) == ["priority", "medium", "low"]
+    assert digested_slugs(groups) == ["p", "m", "l"]
+    for slug in ("p", "m", "l"):
+        row = env.jobsdb.get(slug)
+        assert row["alerts"] == 1 and row["status"] == db_mod.STATUS_WATCHING
+    state = json.loads(env.jobsdb.meta_get("digest_state"))
+    assert state == {"date": "2026-10-18", "slots": ["16:00"]}
+
+
+def test_slot_fires_only_once_per_day(env):
     api = FakeAPI(results=[
         ([job("a")], {}),
         ([job("a"), job("c")], {}),
-        ([job("a"), job("c")], {}),
+        ([job("a"), job("c"), job("z")], {}),
     ])
-    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)      # baseline
-    s2 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)  # c appears
-    s3 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)  # same data again
-    assert s2["new"] == 1 and s2["alerted"] == 1
-    assert env.notifier.calls == [("c", 1)]
-    assert s3["new"] == 0 and s3["alerted"] == 0
-    row = env.jobsdb.get("c")
-    assert row["alerts"] == 1 and row["status"] == db_mod.STATUS_WATCHING
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    env.clock.now = IN_SLOT
+    s2 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert s2["digest"] == 1
+
+    env.clock.now = datetime(2026, 10, 18, 11, 50, tzinfo=UTC)  # 16:50, same window
+    s3 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert s3["new"] == 1 and s3["digest"] == 0 and s3["queued"] == 1
+    assert len(env.notifier.calls) == 1
+    assert env.jobsdb.get("z")["alerts"] == 0
 
 
-def test_reminder_timing_and_schedule(env):
-    api = FakeAPI(results=[
-        ([job("a")], {}),          # baseline
-        ([job("a"), job("w")], {}),  # alert 1
-        ([job("a"), job("w")], {}),  # alert 2
-        ([job("a"), job("w")], {}),  # alert 3
-        ([job("a"), job("w")], {}),  # alert 4
-    ])
-    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)  # baseline (a not watched)
-    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING,
-                      util.to_iso(env.clock()), next_due_iso=util.to_iso(env.clock()))
-
-    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)   # alert 1, due +3h
-    env.clock.advance(hours=4)
-    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)   # alert 2, due +8h
-    env.clock.advance(hours=9)
-    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)   # alert 3, due +24h
-    env.clock.advance(hours=25)
-    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)   # alert 4, due +24h
-
-    assert [c[1] for c in env.notifier.calls] == [1, 2, 3, 4]
-    row = env.jobsdb.get("w")
-    assert row["alerts"] == 4
-    assert row["next_due_at"] == util.to_iso(env.clock() + timedelta(hours=24))
-
-
-def test_next_due_schedule_math():
-    t0 = datetime(2026, 10, 18, 10, 0, tzinfo=UTC)
-    assert next_due_after(1, t0, [3, 8, 24], 10) == util.to_iso(t0 + timedelta(hours=3))
-    assert next_due_after(2, t0, [3, 8, 24], 10) == util.to_iso(t0 + timedelta(hours=8))
-    assert next_due_after(3, t0, [3, 8, 24], 10) == util.to_iso(t0 + timedelta(hours=24))
-    assert next_due_after(9, t0, [3, 8, 24], 10) == util.to_iso(t0 + timedelta(hours=24))
-    assert next_due_after(10, t0, [3, 8, 24], 10) is None
-
-
-def test_no_reminders_after_applied(env):
-    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING,
-                      util.to_iso(env.clock()), next_due_iso=util.to_iso(env.clock()))
-    env.jobsdb.set_status("w", db_mod.STATUS_APPLIED, util.to_iso(env.clock()))
-    api = FakeAPI(results=[([job("w")], {})])
-    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
-    assert stats["alerted"] == 0 and env.notifier.calls == []
-    assert env.jobsdb.get("w")["status"] == db_mod.STATUS_APPLIED
-
-
-def test_no_reminders_after_skipped(env):
-    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING,
-                      util.to_iso(env.clock()), next_due_iso=util.to_iso(env.clock()))
-    env.jobsdb.set_status("w", db_mod.STATUS_SKIPPED, util.to_iso(env.clock()))
-    api = FakeAPI(results=[([job("w")], {})])
-    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
-    assert stats["alerted"] == 0 and env.notifier.calls == []
-
-
-def test_applied_column_in_sheet_stops_reminders(env):
-    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING,
-                      util.to_iso(env.clock()), next_due_iso=util.to_iso(env.clock()))
-    env.store.freehire_upsert({"slug": "w", "applied": "y"})
-    api = FakeAPI(results=[([job("w")], {})])
-    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
-    assert stats["applied_synced"] == 1
-    assert stats["alerted"] == 0 and env.notifier.calls == []
-    assert env.jobsdb.get("w")["status"] == db_mod.STATUS_APPLIED
-
-
-def test_gone_posting_stops_reminders(env):
-    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING,
-                      util.to_iso(env.clock()), next_due_iso=util.to_iso(env.clock()))
-    api = FakeAPI(results=[([], {})], details={})  # 404 on detail
-    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
-    assert stats["closed"] == 1 and env.notifier.calls == []
-    assert env.jobsdb.get("w")["status"] == db_mod.STATUS_CLOSED
-
-
-def test_closed_at_stops_reminders(env):
-    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING,
-                      util.to_iso(env.clock()), next_due_iso=util.to_iso(env.clock()))
-    api = FakeAPI(results=[([], {})],
-                  details={"w": job("w", closed_at="2026-10-18T09:00:00Z")})
-    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
-    assert stats["closed"] == 1 and env.notifier.calls == []
-    assert env.jobsdb.get("w")["status"] == db_mod.STATUS_CLOSED
-
-
-def test_failed_delivery_does_not_advance_state(env):
+def test_missed_slot_never_catches_up(env):
     api = FakeAPI(results=[([job("a")], {}), ([job("a"), job("c")], {}), ([job("a"), job("c")], {})])
-    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)   # baseline
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    env.clock.now = datetime(2026, 10, 18, 9, 0, tzinfo=UTC)  # 14:00: 08:00 slot missed
+    s2 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert s2["digest"] == 0 and env.notifier.calls == []
+    env.clock.now = IN_SLOT  # 16:05: next slot fires normally
+    s3 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert s3["digest"] == 1 and digested_slugs(env.notifier.calls[0]) == ["c"]
+
+
+def test_failed_digest_keeps_state_and_retries_in_window(env):
+    api = FakeAPI(results=[([job("a")], {}), ([job("a"), job("c")], {}), ([job("a"), job("c")], {})])
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    env.clock.now = IN_SLOT
 
     env.notifier.ok = False
     s2 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
-    assert s2["failed"] == 1 and s2["alerted"] == 0
-    row = env.jobsdb.get("c")
-    assert row["alerts"] == 0
-    assert row["next_due_at"] == util.to_iso(env.clock())  # still due: no advance
+    assert s2["failed"] == 1 and s2["digest"] == 0 and s2["alerted"] == 0
+    assert env.jobsdb.get("c")["alerts"] == 0
+    assert env.jobsdb.meta_get("digest_state") is None  # slot not burned
 
-    env.clock.advance(minutes=5)
+    env.clock.now = datetime(2026, 10, 18, 11, 20, tzinfo=UTC)  # still in window
     env.notifier.ok = True
     s3 = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
-    assert s3["alerted"] == 1 and s3["failed"] == 0
-    assert env.jobsdb.get("c")["alerts"] == 1
+    assert s3["digest"] == 1 and env.jobsdb.get("c")["alerts"] == 1
 
 
-def test_quiet_hours_defer_sending(env):
+def test_dry_run_digest_previews_without_writing(env):
+    api = FakeAPI(results=[([job("a")], {}), ([job("a"), job("c")], {})])
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    env.clock.now = IN_SLOT
+    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier, dry_run=True)
+    assert stats["digest"] == 1 and stats["alerted"] == 1
+    assert env.jobsdb.get("c") is None  # dry run wrote nothing
+    assert env.jobsdb.meta_get("digest_state") is None
+
+
+def test_applied_column_in_sheet_excludes_from_digest(env):
+    api = FakeAPI(results=[([job("a")], {}), ([job("a"), job("w")], {})])
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING, util.to_iso(env.clock()))
+    env.store.freehire_upsert({"slug": "w", "applied": "y"})
+    env.clock.now = IN_SLOT
+    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert stats["applied_synced"] == 1
+    assert stats["digest"] == 0 and env.notifier.calls == []
+    assert env.jobsdb.get("w")["status"] == db_mod.STATUS_APPLIED
+
+
+def test_gone_posting_excluded_from_digest(env):
+    api = FakeAPI(results=[([job("a")], {}), ([job("a")], {})], details={})
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING, util.to_iso(env.clock()))
+    env.clock.now = IN_SLOT
+    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert stats["closed"] == 1 and env.notifier.calls == []
+    assert env.jobsdb.get("w")["status"] == db_mod.STATUS_CLOSED
+    assert json.loads(env.jobsdb.meta_get("digest_state"))["slots"] == ["16:00"]
+
+
+def test_closed_at_excluded_from_digest(env):
+    api = FakeAPI(
+        results=[([job("a")], {}), ([job("a")], {})],
+        details={"w": job("w", closed_at="2026-10-18T09:00:00Z")},
+    )
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING, util.to_iso(env.clock()))
+    env.clock.now = IN_SLOT
+    stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    assert stats["closed"] == 1 and env.notifier.calls == []
+    assert env.jobsdb.get("w")["closed_at"] == "2026-10-18T09:00:00Z"
+
+
+def test_quiet_hours_defer_digest_and_slot_is_missed(env):
     env.cfg._raw["freehire"]["quiet_hours"] = [23, 8]
-    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING,
-                      util.to_iso(env.clock()), next_due_iso=util.to_iso(env.clock()))
-    due_before = env.jobsdb.get("w")["next_due_at"]
-    # 18:30 UTC == 23:30 Pakistan -> quiet
-    env.clock.now = datetime(2026, 10, 18, 18, 30, tzinfo=UTC)
-    api = FakeAPI(results=[([job("w")], {}), ([job("w")], {})])
+    env.cfg._raw["freehire"]["digest_times"] = ["23:00"]
+    api = FakeAPI(results=[([job("a")], {}), ([job("w")], {}), ([job("w")], {})])
+    run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
+    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING, util.to_iso(env.clock()))
+
+    env.clock.now = datetime(2026, 10, 18, 18, 35, tzinfo=UTC)  # 23:35: quiet + in window
     stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
     assert stats["deferred_quiet"] == 1 and env.notifier.calls == []
     assert env.jobsdb.get("w")["alerts"] == 0
-    assert env.jobsdb.get("w")["next_due_at"] == due_before  # unchanged: retried next cycle
 
-    env.clock.now = datetime(2026, 10, 19, 5, 0, tzinfo=UTC)  # 10:00 Pakistan
+    env.clock.now = datetime(2026, 10, 19, 4, 0, tzinfo=UTC)  # 09:00 next day
     stats = run_cycle(env.ctx, api, env.jobsdb, env.store, env.notifier)
-    assert stats["alerted"] == 1 and env.notifier.calls == [("w", 1)]
+    assert stats["digest"] == 0 and env.notifier.calls == []  # no catch-up for 23:00
 
 
 def test_ignored_params_are_reported(env):
@@ -298,8 +319,7 @@ def test_ignored_params_are_reported(env):
 
 
 def test_mark_applied_and_unknown_slug(env):
-    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING,
-                      util.to_iso(env.clock()), next_due_iso=util.to_iso(env.clock()))
+    env.jobsdb.insert(job("w"), db_mod.STATUS_WATCHING, util.to_iso(env.clock()))
     assert _mark(env.ctx, "w", db_mod.STATUS_APPLIED) == 0
     row = env.jobsdb.get("w")
     assert row["status"] == db_mod.STATUS_APPLIED and row["applied_at"]
@@ -308,6 +328,16 @@ def test_mark_applied_and_unknown_slug(env):
 
     assert _mark(env.ctx, "nope", db_mod.STATUS_APPLIED) == 1
     assert _mark(env.ctx, None, db_mod.STATUS_APPLIED) == 1
+
+
+def test_classify_tiers_and_priority_wins():
+    cats = FREEHIRE_CFG["categories"]
+    assert classify("Unreal Engineer", cats) == "priority"
+    assert classify("Unity Developer", cats) == "priority"
+    assert classify("Virtual Reality Tester", cats) == "medium"
+    assert classify("Unity + Virtual Reality Engineer", cats) == "priority"
+    assert classify("Warehouse Extended Goods", cats) == "low"
+    assert classify("Some Random Title", cats) == "low"
 
 
 def test_derive_keywords_from_profile():

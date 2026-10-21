@@ -45,6 +45,11 @@ def test_headline_required_in_draft_schema():
     assert "headline" in prompts.DRAFT_SCHEMA["properties"]
 
 
+def test_fit_schema_bounds_local_model_output():
+    assert prompts.FIT_SCHEMA["properties"]["tags"]["maxItems"] == 6
+    assert prompts.FIT_SCHEMA["properties"]["reason"]["maxLength"] == 200
+
+
 def test_profile_summary_embeds_base_story_and_no_headline():
     summary = prompts.profile_summary(PROFILE, PROFILE["projects"], False)
     assert "Headline:" not in summary
@@ -85,6 +90,16 @@ def test_draft_system_keeps_core_guardrails():
     assert "evidence_quote MUST be copied verbatim" in system
     assert "never invent links" in system
     assert "No flattery you cannot back" in system
+
+
+def test_draft_greeting_has_no_repr_quotes():
+    messages = prompts.draft_messages(
+        PROFILE, "Studio XR", PAGE, "Jane Doe", "Founder", "studio", "fulltime",
+        PROFILE["projects"], False, {PROFILE["portfolio_url"]}, "opt-out line",
+    )
+    system = messages[0]["content"]
+    assert "Start the body with exactly: Hi Jane," in system
+    assert "Hi 'Jane'," not in system
 
 
 def test_subject_format_rule_with_sender_name():

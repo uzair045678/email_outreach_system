@@ -9,8 +9,8 @@ FIT_SCHEMA = {
     "properties": {
         "is_xr_company": {"type": "boolean"},
         "company_type": {"type": "string", "enum": ["studio", "agency", "product", "corporation"]},
-        "tags": {"type": "array", "items": {"type": "string"}},
-        "reason": {"type": "string"},
+        "tags": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 24}},
+        "reason": {"type": "string", "maxLength": 200},
     },
     "required": ["is_xr_company", "company_type", "tags", "reason"],
     "additionalProperties": False,
@@ -155,7 +155,7 @@ def draft_messages(
     apply_instructions: str | None = None,
 ) -> list[dict]:
     excerpt = (page_text or "")[:3500]
-    greeting = f"Hi {contact_name.split()[0]!r}," if contact_name else f"Hi team at {company!r},"
+    greeting = f"Hi {contact_name.split()[0]}," if contact_name else f"Hi team at {company},"
     ask = {
         "fulltime": "Ask if they are open to a full-time role on their XR team.",
         "parttime": "Ask if they have any part-time XR work available.",
@@ -184,7 +184,7 @@ def draft_messages(
         f"stack (company tags: {tags_note}). E.g. 'Unity Developer' for Unity shops, 'Unreal Developer' for Unreal "
         "shops, 'XR/VR Developer' or 'AR developer' as the market fits. Base it ONLY on real facts from the sender "
         "profile; never invent skills.\n"
-        "- Body 90-130 words MAXIMUM. Plain text. No emojis. No buzzwords. No flattery you cannot back.\n"
+        "- Body 90-150 words MAXIMUM. Plain text. No emojis. No buzzwords. No flattery you cannot back.\n"
         f"- Start the body with exactly: {greeting}\n"
         "- Body structure: (1) greeting; (2) warm genuine compliment about THEIR work grounded in one specific "
         "detail from the page text below, phrased naturally like \"I came across your company ...\" and embedding the "

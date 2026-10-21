@@ -61,9 +61,9 @@ def _clean_emails(text: str, domain: str) -> list[str]:
         local = email.split("@", 1)[0]
         if local in BAD_LOCAL_PARTS:
             continue
-        if domain and not email.endswith(domain) and not email.endswith("@" + domain):
-            # keep it anyway; some studios use a sibling domain
-            pass
+        email_domain = email.rsplit("@", 1)[-1]
+        if domain and email_domain != domain and not email_domain.endswith("." + domain):
+            continue
         found.append(email)
     return found
 

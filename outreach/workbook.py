@@ -86,6 +86,7 @@ FREEHIRE_COLUMNS = [
     "applied_at",
     "closed_at",
     "notes",
+    "category",
 ]
 
 SHEETS = {
@@ -207,6 +208,7 @@ WIDTHS = {
     "alerts": 8,
     "applied_at": 21,
     "closed_at": 21,
+    "category": 11,
 }
 
 

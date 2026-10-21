@@ -97,7 +97,7 @@ def run(ctx) -> int:
     server = None
     if needs_model:
         server = srv.load_one(cfg, "classify", logger=logger)
-        if server.start(startup_timeout_s=int(cfg.raw.models.startup_timeout_s.raw)):
+        if server.start(timeout_s=int(cfg.raw.models.startup_timeout_s.raw)):
             client = LLMClient(
                 server.base_url,
                 timeout_s=int(cfg.raw.models.request_timeout_s.raw),

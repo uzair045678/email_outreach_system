@@ -32,6 +32,14 @@ CORP_NAMES = ("accenture", "deloitte", "infosys", "wipro", "tcs", "cognizant", "
               "microsoft", "meta", "google", "amazon", "nvidia", "sony", "samsung")
 
 
+def _company_name(cand, domain: str) -> str:
+    if getattr(cand, "source_kind", "direct") == "directory" and (cand.name or "").strip():
+        return cand.name.strip()
+    words = domain.split(".")[0].replace("-", " ").split()
+    return " ".join(word.upper() if word.lower() in {"ai", "ar", "vr", "xr"} else word.capitalize()
+                    for word in words)
+
+
 def _pick_contact(contacts: list) -> object | None:
     for cand in contacts:
         if cand.confidence == "invalid":
@@ -73,8 +81,9 @@ def run(ctx) -> dict:
 
     exclude = store.contacted_domains() | store.bad_domains() | store.suppressed_domains()
     regions = [r.raw if hasattr(r, "raw") else r for r in cfg.raw.region_priority]
+    candidate_limit = ctx.limit or max(target * 3, target + 10)
     candidates = discover_candidates(
-        search_mgr, regions, roles=ROLE_TERMS, need=max(target * 3, target + 10),
+        search_mgr, regions, roles=ROLE_TERMS, need=candidate_limit,
         exclude_domains=exclude, fetcher=fetcher, logger=logger,
     )
     if not candidates:
@@ -87,15 +96,15 @@ def run(ctx) -> dict:
     corp_count = 0
 
     server = srv.load_one(cfg, "draft", logger=logger)
-    started = server.start(startup_timeout_s=int(cfg.raw.models.startup_timeout_s.raw))
+    started = server.start(timeout_s=int(cfg.raw.models.startup_timeout_s.raw))
     if not started:
         logger.error("research: draft model could not start")
         print("research: draft model unavailable.")
         return {"researched": 0, "drafted": 0, "skipped": 0, "error": "no_model"}
 
-    fallback = FallbackChain(cfg, logger=logger) if cfg.raw.fallback_enabled.raw else None
     counts = {"researched": 0, "drafted": 0, "skipped": 0}
     try:
+        fallback = FallbackChain(cfg, logger=logger) if cfg.raw.fallback_enabled.raw else None
         client = LLMClient(
             server.base_url,
             timeout_s=int(cfg.raw.models.request_timeout_s.raw),
@@ -141,6 +150,7 @@ def _is_corp(cand, profile) -> bool:
 def _process_candidate(cand, domain, ctx, drafter, client, fetcher, verifier, profile,
                        corp_cap, corp_count, counts, server) -> bool:
     store, cfg, logger = ctx.store, ctx.cfg, ctx.logger
+    company = _company_name(cand, domain)
     if _is_corp(cand, profile) and corp_count >= corp_cap:
         logger.info("research: skipping corporation %s (cap reached)", domain)
         counts["skipped"] += 1
@@ -152,7 +162,7 @@ def _process_candidate(cand, domain, ctx, drafter, client, fetcher, verifier, pr
         counts["skipped"] += 1
         return False
 
-    fit = drafter.fit(client, cand.name or domain, domain, page_text)
+    fit = drafter.fit(client, company, domain, page_text)
     if not fit or not fit.get("is_xr_company"):
         logger.info("research: %s not an XR company", domain)
         counts["skipped"] += 1
@@ -170,7 +180,7 @@ def _process_candidate(cand, domain, ctx, drafter, client, fetcher, verifier, pr
     contact_dict = {"name": contact.name, "role": contact.role, "tags": tags}
 
     draft, errors, used_fallback = drafter.generate(
-        client, cand.name or domain, page_text, contact_dict, company_type,
+        client, company, page_text, contact_dict, company_type,
         "fulltime", bool(cfg.raw.toggles.include_marketplace_links.raw),
     )
     if draft is None:
@@ -199,7 +209,7 @@ def _process_candidate(cand, domain, ctx, drafter, client, fetcher, verifier, pr
             attachment = cv
 
     row = {
-        "company": cand.name or domain,
+        "company": company,
         "website": website,
         "country": cand.region,
         "region_priority": cand.region,
@@ -222,7 +232,7 @@ def _process_candidate(cand, domain, ctx, drafter, client, fetcher, verifier, pr
         "notes": "fallback draft" if used_fallback else "",
     }
     if ctx.dry_run:
-        logger.info("research[dry-run]: would queue %s <%s>", cand.name, contact.email)
+        logger.info("research[dry-run]: would queue %s <%s>", company, contact.email)
     else:
         store.queue_add(row)
     counts["researched"] += 1

@@ -1,17 +1,22 @@
-"""One watch cycle: search, baseline, new-job alerts, reminders, closures.
+"""One watch cycle: search, baseline, daily digest, closures.
 
 Rules enforced here:
-  * first ever run stores everything silently (baseline, no alerts)
-  * an alert is sent only when delivery succeeds; failures never advance
-    ``alerts`` or ``next_due_at``, so the next cycle simply retries
-  * reminders follow config ``reminder_hours`` up to ``max_alerts``
-  * quiet hours defer sending without touching state
-  * a job whose posting closed (404 or ``closed_at``) stops reminders
+  * first ever run stores everything silently (baseline, no digest)
+  * new jobs wait quietly until a digest slot fires (config ``digest_times``):
+    four local-time slots per day; a slot only fires if this cycle runs inside
+    ``[slot, slot+1h)`` - missed windows are skipped, never catch-up
+  * the digest groups jobs priority/medium/low by title keywords (config
+    ``categories``) and is one email; each job is listed in exactly one digest
+  * a failed digest email never advances ``alerts`` or the slot record, so the
+    next in-window cycle simply retries
+  * quiet hours defer the digest without touching state
+  * a job whose posting closed (404 or ``closed_at``) is dropped from the digest
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import json
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -23,6 +28,7 @@ from .api import FreehireAPI, FreehireAPIError
 CORE_KEYWORDS = ["XR", "VR", "AR", "WebXR"]
 # Project tags worth searching (games/mobile/multiplayer/ai are far too broad).
 TAG_ALLOW = {"xr", "vr", "mr", "ar", "webar", "hololens", "quest", "metaverse"}
+TIERS = ("priority", "medium", "low")
 
 
 def derive_keywords(profile_raw: dict) -> list[str]:
@@ -56,13 +62,27 @@ def in_quiet_hours(now: datetime, quiet: list[int], tz_name: str) -> bool:
     return local.hour >= start or local.hour < end
 
 
-def next_due_after(alerts_done: int, now: datetime, reminder_hours: list[int],
-                   max_alerts: int) -> str | None:
-    """ISO due time for the next reminder, or None once the schedule is spent."""
-    if alerts_done >= max_alerts or not reminder_hours:
+def categories_of(fh) -> dict[str, list[str]]:
+    cats = fh.categories.raw or {}
+    return {tier: [str(k) for k in (cats.get(tier) or [])] for tier in TIERS}
+
+
+def classify(title: str | None, categories: dict[str, list[str]]) -> str:
+    """Tier a job by title keywords; highest tier wins, no match = low."""
+    text = (title or "").lower()
+    for tier in TIERS:
+        for kw in categories.get(tier) or []:
+            if kw.lower() in text:
+                return tier
+    return "low"
+
+
+def _slot_minutes(hhmm: str) -> int | None:
+    try:
+        hours, minutes = hhmm.split(":")
+        return int(hours) * 60 + int(minutes)
+    except ValueError:
         return None
-    index = min(alerts_done - 1, len(reminder_hours) - 1)
-    return util.to_iso(now + timedelta(hours=float(reminder_hours[index])))
 
 
 def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
@@ -80,10 +100,11 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
         "open_within_days": fh.open_within_days.raw,
         "is_tech": fh.is_tech.raw,
     }
+    categories = categories_of(fh)
     stats: dict[str, Any] = {
         "searches": 0, "ignored_params": [], "seen": 0, "baselined": 0,
-        "new": 0, "alerted": 0, "deferred_quiet": 0, "failed": 0,
-        "closed": 0, "applied_synced": 0, "errors": 0, "samples": {},
+        "new": 0, "queued": 0, "alerted": 0, "digest": 0, "deferred_quiet": 0,
+        "failed": 0, "closed": 0, "applied_synced": 0, "errors": 0, "samples": {},
     }
 
     # -- search (sequential, capped) ----------------------------------------
@@ -123,7 +144,7 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
             for job in seen.values():
                 jobsdb.insert(job, db_mod.STATUS_BASELINE, now_iso)
             for row in jobsdb.all_rows():
-                _sync_sheet(store, row)
+                _sync_sheet(store, row, classify(row.get("title"), categories))
         elif seen:
             stats["sample"] = next(iter(seen.values()))
         logger.info("freehire baseline: %d existing job(s) %s", len(seen),
@@ -138,98 +159,160 @@ def run_cycle(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store, notifier,
                 jobsdb.set_status(slug, db_mod.STATUS_APPLIED, now_iso)
                 stats["applied_synced"] += 1
 
-    # -- new jobs --------------------------------------------------------------
+    # -- new jobs: stored quietly, digested later -----------------------------
     known = jobsdb.slugs()
     new_slugs = [slug for slug in seen if slug not in known]
     stats["new"] = len(new_slugs)
     if not dry_run:
         for slug in new_slugs:
-            jobsdb.insert(seen[slug], db_mod.STATUS_WATCHING, now_iso, next_due_iso=now_iso)
+            jobsdb.insert(seen[slug], db_mod.STATUS_WATCHING, now_iso)
 
-    # -- delivery over due rows ------------------------------------------------
-    if dry_run:
-        rows = jobsdb.due(now_iso)
-        for slug in new_slugs:
-            job = seen[slug]
-            rows.append({
-                "slug": slug, "title": job.get("title") or "",
-                "company": job.get("company") or "", "url": job.get("url") or "",
-                "location": job.get("location") or "",
-                "work_mode": job.get("work_mode") or "",
-                "status": db_mod.STATUS_WATCHING, "alerts": 0,
-            })
-    else:
-        rows = jobsdb.due(now_iso)
+    # Dry runs never insert, so new jobs must be carried into the digest as
+    # virtual candidates to preview what a real run would send.
+    virtual_new = [seen[slug] for slug in new_slugs] if dry_run else []
+    stats["queued"] = len(jobsdb.undigested()) + len(virtual_new)
+    _maybe_send_digest(ctx, api, jobsdb, store, notifier, stats, seen, now,
+                       dry_run, virtual_new)
 
-    quiet = list(fh.quiet_hours.raw)
-    max_alerts = int(fh.max_alerts.raw)
-    reminder_hours = list(fh.reminder_hours.raw)
-    tz_name = str(profile.get("timezone") or "")
+    if not dry_run and store is not None:
+        for row in jobsdb.all_rows():
+            _sync_sheet(store, row, classify(row.get("title"), categories))
+    if dry_run and stats["alerted"] == 0 and not stats.get("sample") and seen:
+        stats["sample"] = next(iter(seen.values()))
+    return stats
 
-    for row in rows:
-        slug = row["slug"]
-        if int(row["alerts"] or 0) >= max_alerts:
-            if not dry_run:
-                jobsdb.update(slug, next_due_at=None)
+
+def _maybe_send_digest(ctx, api: FreehireAPI, jobsdb: db_mod.JobsDB, store,
+                       notifier, stats: dict[str, Any], seen: dict[str, dict],
+                       now: datetime, dry_run: bool,
+                       virtual_new: list[dict] | None = None) -> None:
+    """Fire one digest when the local clock sits inside an unsent slot window."""
+    cfg, logger = ctx.cfg, ctx.logger
+    fh = cfg.raw.freehire
+    tz_name = str(ctx.cfg.profile_raw().get("timezone") or "")
+    try:
+        local = now.astimezone(ZoneInfo(tz_name or "UTC"))
+    except Exception:  # noqa: BLE001 - unknown tz: machine local
+        local = now.astimezone()
+    today = local.strftime("%Y-%m-%d")
+    now_min = local.hour * 60 + local.minute
+
+    state: dict[str, Any] = {}
+    raw = jobsdb.meta_get("digest_state")
+    if raw:
+        try:
+            state = json.loads(raw)
+        except ValueError:
+            state = {}
+    sent_today = list(state.get("slots") or []) if state.get("date") == today else []
+
+    slot: str | None = None
+    for candidate in fh.digest_times.raw or []:
+        name = str(candidate)
+        start = _slot_minutes(name)
+        if start is None:
+            logger.warning("freehire: bad digest_times entry %r ignored", candidate)
             continue
+        if name in sent_today:
+            continue
+        if start <= now_min < start + 60:
+            slot = name
+            break
+    if slot is None:
+        return  # outside every window: missed slots are skipped, no catch-up
 
+    def _record_slot() -> None:
+        if not dry_run:
+            jobsdb.meta_set("digest_state", json.dumps(
+                {"date": today, "slots": sent_today + [slot]}))
+
+    # Quiet hours defer real sending; a dry run is a preview.
+    if not dry_run and in_quiet_hours(now, list(fh.quiet_hours.raw), tz_name):
+        stats["deferred_quiet"] += 1
+        logger.debug("freehire: digest slot %s deferred (quiet hours)", slot)
+        return
+
+    candidates = jobsdb.undigested()
+    if dry_run and virtual_new:
+        known = {row["slug"] for row in candidates}
+        candidates = candidates + [
+            {**job, "slug": job.get("public_slug") or ""}
+            for job in virtual_new
+            if (job.get("public_slug") or "") not in known
+        ]
+    if not candidates:
+        _record_slot()  # nothing new; never email an empty digest
+        logger.info("freehire: digest slot %s: 0 new jobs, nothing sent", slot)
+        return
+
+    categories = categories_of(fh)
+    now_ref = util.to_iso(now)
+    fresh: list[dict] = []
+    for row in candidates:
+        slug = row["slug"]
         job = seen.get(slug)
         if job is None:
             try:
                 job = api.get_job(slug)
             except FreehireAPIError as exc:
-                logger.warning("freehire detail %s failed: %s", slug, exc)
+                logger.warning("freehire detail %s failed: %s; listing stored copy", slug, exc)
                 stats["errors"] += 1
-                continue  # no state change: retried next cycle
+                job = row  # keep it; a listing is better than a lost job
             if job is None:
                 stats["closed"] += 1
                 if not dry_run:
-                    jobsdb.set_status(slug, db_mod.STATUS_CLOSED, now_iso)
-                    _sync_sheet(store, jobsdb.get(slug))
+                    jobsdb.set_status(slug, db_mod.STATUS_CLOSED, now_ref)
+                    stored = jobsdb.get(slug)
+                    _sync_sheet(store, stored,
+                                classify(stored.get("title") if stored else "", categories))
                 continue
         if job.get("closed_at"):
             stats["closed"] += 1
             if not dry_run:
                 jobsdb.update(slug, status=db_mod.STATUS_CLOSED, next_due_at=None,
                               closed_at=str(job.get("closed_at")))
-                _sync_sheet(store, jobsdb.get(slug))
+                _sync_sheet(store, jobsdb.get(slug),
+                            classify(str(job.get("title") or row.get("title") or ""),
+                                     categories))
             continue
+        fresh.append({**row, **{k: job.get(k) for k in
+                                ("title", "company", "url", "location", "work_mode")
+                                if job.get(k)}})
 
-        # Quiet hours only defer real sending; a dry run is a preview.
-        if not dry_run and in_quiet_hours(now, quiet, tz_name):
-            stats["deferred_quiet"] += 1
-            logger.debug("freehire: %s deferred (quiet hours)", slug)
-            continue
+    if not fresh:
+        _record_slot()  # every candidate closed; don't spin on this slot forever
+        return
 
-        alert_no = int(row["alerts"] or 0) + 1
-        payload = {**row, **{k: job.get(k) for k in
-                             ("title", "company", "url", "location", "work_mode")
-                             if job.get(k)}}
-        delivered = notifier.alert(payload, alert_no=alert_no, max_alerts=max_alerts)
-        if not delivered:
-            stats["failed"] += 1
-            logger.warning("freehire: delivery failed for %s; state unchanged, will retry", slug)
-            continue
-
-        stats["alerted"] += 1
-        if not dry_run:
-            next_due = next_due_after(alert_no, now, reminder_hours, max_alerts)
-            jobsdb.record_alert(slug, now_iso, next_due)
-            _sync_sheet(store, jobsdb.get(slug))
-
-    if not dry_run and store is not None:
-        for row in jobsdb.all_rows():
-            _sync_sheet(store, row)
-    if dry_run and stats["alerted"] == 0 and not stats.get("sample") and seen:
-        stats["sample"] = next(iter(seen.values()))
-    return stats
+    groups = [(tier, [j for j in fresh
+                      if classify(str(j.get("title") or ""), categories) == tier])
+              for tier in TIERS]
+    delivered = notifier.digest(groups)
+    if not delivered:
+        stats["failed"] += 1
+        logger.warning("freehire: digest delivery failed; state unchanged, will retry in-window")
+        return
+    stats["digest"] = 1
+    stats["alerted"] = sum(len(jobs) for _, jobs in groups)
+    if not dry_run:
+        for _, jobs in groups:
+            for job in jobs:
+                jobsdb.record_alert(job["slug"], now_ref, None)
+        _record_slot()
+        logger.info("freehire: digest slot %s sent (%s)", slot,
+                    _counts_label(groups))
 
 
-def _sync_sheet(store, row: dict | None) -> None:
+def _counts_label(groups: list[tuple[str, list[dict]]]) -> str:
+    total = sum(len(j) for _, j in groups)
+    parts = [f"{tier}:{len(jobs)}" for tier, jobs in groups if jobs]
+    return f"{total} jobs ({', '.join(parts)})"
+
+
+def _sync_sheet(store, row: dict | None, category: str = "") -> None:
     """Mirror a job to the Freehire sheet without touching the applied column."""
     if store is None or not row:
         return
-    store.freehire_upsert({
+    data = {
         "slug": row.get("slug"),
         "title": row.get("title"),
         "company": row.get("company"),
@@ -242,4 +325,7 @@ def _sync_sheet(store, row: dict | None) -> None:
         "alerts": row.get("alerts"),
         "applied_at": row.get("applied_at"),
         "closed_at": row.get("closed_at"),
-    })
+    }
+    if category:
+        data["category"] = category
+    store.freehire_upsert(data)

@@ -1,4 +1,4 @@
-"""`freehire`: watch freehire.me job posts; alert only you, never a company.
+"""`freehire`: watch freehire.me job posts; one daily digest, never a company.
 
 Actions:
   run      one watch cycle (this is what the scheduled task calls)
@@ -15,7 +15,7 @@ import sys
 from .. import util
 from ..freehire import db as db_mod
 from ..freehire.api import FreehireAPI
-from ..freehire.notify import Notifier, render_alert
+from ..freehire.notify import Notifier
 from ..freehire.watch import run_cycle
 
 
@@ -68,7 +68,8 @@ def _cycle(ctx) -> int:
 
     line = (
         f"freehire: searches={stats['searches']} seen={stats['seen']}"
-        f" baseline={stats['baselined']} new={stats['new']} alerted={stats['alerted']}"
+        f" baseline={stats['baselined']} new={stats['new']} queued={stats['queued']}"
+        f" digest={stats['digest']} alerted={stats['alerted']}"
         f" quiet={stats['deferred_quiet']} failed={stats['failed']}"
         f" closed={stats['closed']} applied={stats['applied_synced']}"
         f" errors={stats['errors']}"
@@ -83,9 +84,6 @@ def _cycle(ctx) -> int:
             print(f"  q={keyword!r} total={sample['total']}:")
             for title in sample["titles"]:
                 print(f"    - {title}")
-        if stats.get("sample"):
-            subject, body = render_alert(stats["sample"], 1, int(fh.max_alerts.raw))
-            print(f"\n[dry-run] sample of the alert that would be emailed:\nSubject: {subject}\n{body}")
 
     if stats["searches"] == 0 and stats["errors"]:
         return 1
@@ -114,7 +112,7 @@ def _mark(ctx, target: str | None, status: str) -> int:
         store.freehire_update(target, **fields)
     finally:
         jobsdb.close()
-    print(f"{target}: marked {status}; reminders stopped.")
+    print(f"{target}: marked {status}; it will not appear in digests.")
     return 0
 
 

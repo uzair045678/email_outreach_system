@@ -46,10 +46,11 @@ function New-OutreachTask {
     Write-Host "registered: Outreach-$Name  ($Command)"
 }
 
-# Discovery + drafting once each morning.
+# Discovery + drafting at night, ready for next-day review. StartWhenAvailable
+# runs a missed night task after the user next turns on and logs into Windows.
 New-OutreachTask -Name "Research" -Command "research" `
-    -Description "Discover companies, draft emails, queue for review." `
-    -Trigger (New-ScheduledTaskTrigger -Daily -At 6:30am)
+    -Description "Prepare next-day company outreach drafts and prompt for approval." `
+    -Trigger (New-ScheduledTaskTrigger -Daily -At 10:30pm)
 
 # Send loop: every 30 minutes, all day (send command self-limits to local slots).
 # PS 5.1 cannot serialize TimeSpan.MaxValue into task XML, so repeat for ~10 years.
@@ -72,10 +73,10 @@ New-OutreachTask -Name "Replies" -Command "replies" `
         -RepetitionInterval (New-TimeSpan -Minutes 60) `
         -RepetitionDuration (New-TimeSpan -Days 3650))
 
-# freehire job watcher: hourly. Alerts only you (email + Windows notification);
-# it never emails a company.
+# freehire job watcher: hourly. Sends at most one digest email to you per
+# digest_times slot (default 08/16/20/22); it never emails a company.
 New-OutreachTask -Name "Freehire" -Command "freehire" `
-    -Description "Poll freehire.me for new matching jobs and alert you." `
+    -Description "Poll freehire.me for new matching jobs; daily digest email to you." `
     -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(25) `
         -RepetitionInterval (New-TimeSpan -Minutes 60) `
         -RepetitionDuration (New-TimeSpan -Days 3650))

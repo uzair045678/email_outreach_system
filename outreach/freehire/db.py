@@ -46,6 +46,9 @@ class JobsDB:
             )
             """
         )
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
         self.conn.commit()
 
     # -- reads ---------------------------------------------------------------
@@ -67,11 +70,10 @@ class JobsDB:
         rows = self.conn.execute("SELECT * FROM jobs WHERE status = ?", (status,))
         return [dict(r) for r in rows]
 
-    def due(self, now_iso: str) -> list[dict]:
+    def undigested(self) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT * FROM jobs WHERE status = ? AND next_due_at IS NOT NULL"
-            " AND next_due_at <= ? ORDER BY next_due_at",
-            (STATUS_WATCHING, now_iso),
+            "SELECT * FROM jobs WHERE status = ? AND alerts = 0 ORDER BY first_seen",
+            (STATUS_WATCHING,),
         )
         return [dict(r) for r in rows]
 
@@ -117,6 +119,19 @@ class JobsDB:
             "UPDATE jobs SET alerts = alerts + 1, last_alert_at = ?, next_due_at = ?"
             " WHERE slug = ?",
             (now_iso, next_due_iso, slug),
+        )
+        self.conn.commit()
+
+    # -- meta ----------------------------------------------------------------
+    def meta_get(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def meta_set(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
         )
         self.conn.commit()
 

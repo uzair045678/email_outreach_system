@@ -64,13 +64,13 @@ models:
   max_tokens: 700
 
 # --- LLM fallback chain (OpenAI-compatible endpoints) ----------------------
-# Used ONLY when a local draft fails validation twice, or the local server
-# cannot start. Keys live in .env (see .env.example). Tried in order.
-fallback_enabled: true
+# Optional remote APIs used only after local draft validation fails.
+# Disabled: drafting stays on the installed local model.
+fallback_enabled: false
 fallback:
   - name: google_ai_studio
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
-    model: gemini-2.0-flash
+    model: gemini-3.8-flash
     api_key_env: GOOGLE_AI_STUDIO_API_KEY
   - name: opencode_zen
     base_url: https://opencode.ai/zen/v1
@@ -78,7 +78,7 @@ fallback:
     api_key_env: OPENCODE_ZEN_API_KEY
   - name: openrouter
     base_url: https://openrouter.ai/api/v1
-    model: google/gemini-2.0-flash-001
+    model: ~google/gemini-flash-latest
     api_key_env: OPENROUTER_API_KEY 
 
 # --- Search providers -------------------------------------------------------
@@ -145,15 +145,15 @@ region_priority:
 # --- Email drafting constraints --------------------------------------------
 draft:
   min_body_words: 70
-  max_body_words: 130
+  max_body_words: 150
   max_subject_len: 70
   retries_before_fallback: 2
 
 # --- freehire job watcher (python -m outreach freehire run) -----------------
-# Polls the keyless public API at freehire.me. Alerts only you; it never
-# emails a company. Jobs.db lives under cache/freehire/, rows mirror to the
-# Freehire sheet in outreach.xlsx (set applied = y there or run
-# `freehire applied <slug>` to stop reminders).
+# Polls the keyless public API at freehire.me. One digest email to you at the
+# next digest_times slot; it never emails a company. Jobs.db lives under
+# cache/freehire/, rows mirror to the Freehire sheet in outreach.xlsx (set
+# applied = y there or run `freehire applied <slug>` to stop a job appearing).
 freehire:
   enabled: true
   base_url: https://freehire.me/api/v1
@@ -166,8 +166,11 @@ freehire:
   work_mode: ""                     # "", remote, hybrid or onsite
   is_tech: tech                     # tech-only postings (kills nurse/guard noise); "" = off
   keywords: [Unity, Unreal, Virtual Reality, Augmented Reality, Extended Reality, Mixed reality, Game Developer]  # empty = derived from profile.yaml
-  reminder_hours: [3, 8, 24]        # gap after each delivered alert; last entry repeats
-  max_alerts: 10                    # stop reminding after this many alerts per job
+  digest_times: ["08:00", "16:00", "20:00", "22:00"]  # local; a slot fires only if a cycle runs in [slot, slot+1h)
+  categories:                       # digest grouping by title keywords (highest tier wins; no match = low)
+    priority: [Unity, Unreal, Game Developer]
+    medium: [Virtual Reality, Augmented Reality]
+    low: [Extended Reality, Mixed reality]
   quiet_hours: [23, 8]              # local hours (start, end) when nothing is sent
-  notify_email: true                # alert email to yourself via Himalaya
-  notify_windows: true              # Windows notification on the first alert per job
+  notify_email: true                # daily digest email to yourself via Himalaya
+  notify_windows: true              # one Windows toast when the digest goes out

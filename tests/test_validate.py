@@ -155,6 +155,21 @@ class ScriptedClient:
         return self.payloads.pop(0)
 
 
+def test_fit_uses_small_deterministic_response_budget():
+    class FitClient:
+        def __init__(self):
+            self.kwargs = None
+
+        def chat_json(self, messages, schema=None, **kwargs):
+            self.kwargs = kwargs
+            return {"is_xr_company": True, "company_type": "studio", "tags": ["vr"], "reason": "match"}
+
+    client = FitClient()
+    result = Drafter(cfg()).fit(client, "Studio XR", "studio-xr.com", PAGE)
+    assert result["is_xr_company"] is True
+    assert client.kwargs == {"temperature": 0.1, "max_tokens": 320}
+
+
 class FakeFallback:
     def __init__(self, payloads):
         self.available = True
@@ -178,6 +193,63 @@ def test_retry_then_success():
     draft, errors, used_fb = d.generate(client, "Studio XR", PAGE, {"name": "Jane Doe", "tags": ["vr", "unity"]}, "studio", "fulltime", False)
     assert draft is not None and not errors and used_fb is False
     assert client.calls == 2
+
+
+def test_retry_includes_validation_feedback():
+    bad = {"subject": "x", "body": "too short", "evidence_quote": "nope", "evidence_url": "", "template_variant": "studio"}
+    good = {
+        "subject": "XR developer for your VR training team",
+        "body": good_body(),
+        "evidence_quote": "Studio XR builds immersive VR training experiences for industry using Unity and Unreal.",
+        "evidence_url": "https://studio-xr.com/about",
+        "template_variant": "studio",
+    }
+
+    class FeedbackClient(ScriptedClient):
+        def __init__(self, payloads):
+            super().__init__(payloads)
+            self.messages = []
+
+        def chat_json(self, messages, schema=None, **kw):
+            self.messages.append(messages)
+            return super().chat_json(messages, schema=schema, **kw)
+
+    client = FeedbackClient([bad, good])
+    draft, errors, used_fb = Drafter(cfg()).generate(
+        client, "Studio XR", PAGE, {"name": "Jane Doe", "tags": ["vr"]},
+        "studio", "fulltime", False,
+    )
+    assert draft is not None and not errors and used_fb is False
+    assert "body too short" in client.messages[1][-1]["content"]
+
+
+def test_retry_keeps_errors_from_all_previous_attempts():
+    first = {"subject": "x", "body": "too short", "evidence_quote": "nope", "evidence_url": "", "template_variant": "studio"}
+    second = {
+        "subject": "x",
+        "body": good_body().replace("https://github.com/uzair", ""),
+        "evidence_quote": PAGE,
+        "evidence_url": "",
+        "template_variant": "studio",
+    }
+
+    class FeedbackClient(ScriptedClient):
+        def __init__(self, payloads):
+            super().__init__(payloads)
+            self.messages = []
+
+        def chat_json(self, messages, schema=None, **kw):
+            self.messages.append(messages)
+            return super().chat_json(messages, schema=schema, **kw)
+
+    client = FeedbackClient([first, second, second])
+    Drafter(cfg()).generate(
+        client, "Studio XR", PAGE, {"name": "Jane Doe", "tags": ["vr"]},
+        "studio", "fulltime", False,
+    )
+    final_feedback = client.messages[2][-1]["content"]
+    assert "body too short" in final_feedback
+    assert "github_url" in final_feedback
 
 
 def test_fallback_used_after_failures():

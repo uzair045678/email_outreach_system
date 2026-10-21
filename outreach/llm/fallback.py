@@ -16,9 +16,9 @@ class FallbackChain:
         self.providers: list[LLMClient] = []
         if not self.enabled:
             return
-        for entry in cfg.raw.fallback:
-            name = entry.name.raw
-            key_env = entry.api_key_env.raw
+        for entry in cfg.raw.fallback.raw:
+            name = entry["name"]
+            key_env = entry["api_key_env"]
             key = cfg.env(key_env)
             if not key:
                 if logger:
@@ -26,9 +26,9 @@ class FallbackChain:
                 continue
             self.providers.append(
                 LLMClient(
-                    base_url=entry.base_url.raw,
+                    base_url=entry["base_url"],
                     api_key=key,
-                    model=entry.model.raw,
+                    model=entry["model"],
                     timeout_s=int(cfg.raw.models.request_timeout_s.raw),
                     temperature=float(cfg.raw.models.temperature.raw),
                     max_tokens=int(cfg.raw.models.max_tokens.raw),
